@@ -21,6 +21,7 @@ byte-identical and never duplicates the report section.
 Usage: apply-verification.py <RUN_DIR>
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -132,6 +133,12 @@ def main():
     run_dir = Path(sys.argv[1])
     if not run_dir.is_dir():
         sys.exit(f"run dir not found: {run_dir}")
+
+    # Refuse to write outside the runs root (path-traversal guard; override for tests).
+    runs_root = Path(os.environ.get("ANGEL_RUNS_ROOT", str(Path.home() / ".angel" / "runs"))).resolve()
+    resolved = run_dir.resolve()
+    if resolved != runs_root and runs_root not in resolved.parents:
+        sys.exit(f"refusing to write outside runs root {runs_root}: {run_dir}")
 
     vdir = run_dir / "verification"
     verdict_files = sorted(vdir.glob("*.json")) if vdir.is_dir() else []

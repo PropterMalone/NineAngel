@@ -450,7 +450,11 @@ AV="$ANGEL_RUNS_ROOT/20260601T140000Z-verify1"
 mk_usage "$AV" 80000; echo "stub" > "$AV/findings/adv.md"
 cat > "$AV/findings-snapshot.json" <<'JSON'
 {"version":2,"project":"demo","mode":"full","verdict":"CHANGES REQUIRED",
- "personas_run":["adv","rtfm"],"verify_queue":["f1","f2"],
+ "personas_run":["adv","rtfm"],
+ "verify_queue":[
+  {"id":"f1","severity":"critical","title":"Crit one","file":"src/a.ts","line":"10","claim":"the guard was removed","repro_hint":"check whether the guard path still rejects"},
+  {"id":"f2","severity":"important","title":"Imp two","file":"src/b.ts","line":"20","claim":"cap ordering wrong","repro_hint":null}
+ ],
  "findings":[
   {"id":"f1","severity":"critical","title":"Crit one","personas":["adv"],"verification":null},
   {"id":"f2","severity":"important","title":"Imp two","personas":["rtfm"],"verification":null},
@@ -459,6 +463,8 @@ cat > "$AV/findings-snapshot.json" <<'JSON'
 JSON
 printf '# Code Review — CHANGES REQUIRED\n\n## Critical\n\n- stuff\n\n---\n\n*Review by NineAngel — 2026-06-01*\n' > "$AV/report.md"
 cp "$AV/findings-snapshot.json" "$TMP/snap.orig"
+# path-traversal guard: refuse run dirs outside ANGEL_RUNS_ROOT
+rc=0; "$DIR/apply-verification.py" /etc 2>/dev/null || rc=$?; rc_is $rc 1 "write outside runs-root rejected (apply-verification)"
 # zero verdict files (missing dir, then empty dir) -> no-op exit 0, nothing written
 rc=0; nout="$("$DIR/apply-verification.py" "$AV")" || rc=$?
 rc_is $rc 0 "no verification dir -> exit 0"
@@ -490,7 +496,7 @@ assert by["f1"]["verification"] == {"verdict": "REFUTED", "method": "ran",
     "evidence": "repro script shows the guard already covers this"}, by["f1"]  # note NOT copied
 assert by["f2"]["verification"]["verdict"] == "CONFIRMED", by["f2"]
 assert by["f3"]["verification"] is None, by["f3"]           # no verdict -> stays null
-assert s["verify_queue"] == ["f1", "f2"], s["verify_queue"] # queue untouched
+assert [e["id"] for e in s["verify_queue"]] == ["f1", "f2"], s["verify_queue"] # queue untouched (object schema per integrator.md Phase 3.5)
 print("av-asserts-ok")
 PY
 rc_is $rc 0 "verdicts patched into snapshot; verdict-less finding stays null"
