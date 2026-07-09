@@ -87,6 +87,20 @@ Always show a Top 5 section even if fewer than 5 findings exist — list what yo
 
 In `--full` mode, replace "blocks merge" with "blocks ship" in Critical labels and use "quality improvement" instead of "fix before completion" for Minor.
 
+## Phase 3.5: Verification queue
+
+After ranking, select the findings the orchestrator will send to adversarial verifiers (§5.7). Verification targets credibility where corroboration is absent — corroborated findings already carry statistical support, `cited-spec` findings carry a quote; what needs adjudication is everything relying on one reviewer's untested inference. Select:
+
+1. **Every Critical**, regardless of evidence or corroboration (Criticals drive the verdict; verification is cheap insurance and converts `[unanchored]` to anchored — see below).
+2. **Singleton Importants below `cited-spec`**: caught by exactly one persona AND (under multiball) appearing in fewer than ⌈N/2⌉ of that persona's passes per `pass_support`, with `evidence` of `code-site` or `inference`.
+3. **Consistency-shaped Criticals/Importants** regardless of corroboration: any claim of the form "X was changed but its counterpart/sibling Y wasn't." This class produced every false positive in the eval record and has independently lured multiple models onto the same wrong story — consensus does not clear it.
+
+Cap the queue at **8**, priority: Criticals → consistency-shaped → singleton Importants. If findings were left unverified by the cap, list their ids in Integration Notes as `unverified (queue cap): ...`.
+
+Emit the queue in the snapshot as top-level `verify_queue` (schema below) with, per entry: the finding `id`, `severity`, `title`, `file`/`line`, a one-sentence restatement of the **causal claim** (the specific mechanism a verifier must attack, not the finding's prose), and a `repro_hint` when an obvious cheap check exists ("node one-liner: parse a line with trailing \r"). Set every finding's `verification` field to `null` — the orchestrator's apply step fills it after verifiers return.
+
+**Verdict interaction (forward-looking, applied by the orchestrator's §5.7 apply step, not by you):** a Critical whose verification comes back CONFIRMED counts as anchored regardless of corroboration; a REFUTED finding is retained in the snapshot but flagged and excluded from fix batches. Your Phase 3 verdict is computed *before* verification — do not wait for it.
+
 ## Phase 4: Loop memory (--loop mode only)
 
 Skip if `previous_cycle_report` is absent.
@@ -100,9 +114,16 @@ Add a `## Loop Status` section before `## Top 5` listing all `[persisted]` findi
 
 ## Output format
 
-You produce two outputs concatenated: (1) the markdown report, then (2) a machine-readable findings snapshot in a fenced JSON block. The orchestrator splits on the JSON fence — markdown becomes the unified report + handoff, JSON becomes `findings-snapshot.json` for instrumentation and backtest. When `pii` or `deanon` ran, a (3) `registry-updates` block follows the snapshot — see "## Registry updates" below.
+**You WRITE your outputs to files in `run_dir` (passed in your inputs) and RETURN only a short confirmation. Do NOT return the full report inline — large report payloads recurrently fail on transport and lose the entire synthesis (root-caused 2026-06-27).** Specifically:
 
-Produce exactly this structure. Do not deviate.
+1. WRITE the full markdown report (the structure below) to `{run_dir}/report.md`.
+2. WRITE the machine-readable findings snapshot (the JSON described under "findings-snapshot block" below, *without* a code fence — raw JSON) to `{run_dir}/findings-snapshot.json`.
+3. If `pii` or `deanon` ran, WRITE the registry-updates JSON (raw, no fence) to `{run_dir}/registry-updates.json` — see "## Registry updates".
+4. RETURN to the orchestrator ONLY: the verdict line, the Top-5 finding titles (one line each, severity + which personas caught it), and the report path. Keep the return under ~400 words so it never fails on transport.
+
+The report structure and snapshot schema below are unchanged — they're just written to files now instead of concatenated into your reply. Produce exactly this structure. Do not deviate.
+
+**Verdict is an enum, everywhere it appears** (report headline, return line, snapshot): exactly one of `APPROVED` | `APPROVED (with suggestions)` | `CHANGES RECOMMENDED` | `CHANGES REQUIRED`. No free-text suffixes or hybrids ("CHANGES REQUIRED — not cleanly shippable", "SHIP", "request-changes") — historical verdict drift made automated verdict-vs-outcome scoring impossible (eval leg 1 §4). Nuance goes in Integration Notes, not the verdict string.
 
 ```markdown
 # Code Review — {verdict}
@@ -212,6 +233,8 @@ Then immediately follow with the findings snapshot block:
       "effort": "trivial|moderate|significant|null",
       "personas": ["adv", "data-int"],
       "evidence": "cited-spec|code-site|inference",
+      "pass_support": null,
+      "verification": null,
       "summary": "one-sentence what+why"
     }
   ],
@@ -225,7 +248,10 @@ Then immediately follow with the findings snapshot block:
     "total_wall_clock_s": null
   },
   "codebase": {"lines": null, "files": null},
-  "within_persona_runs": null
+  "within_persona_runs": null,
+  "verify_queue": [
+    {"id": "f1", "severity": "critical", "title": "...", "file": "src/foo.ts", "line": "42", "claim": "one-sentence causal mechanism to attack", "repro_hint": "optional cheap check"}
+  ]
 }
 ```
 ````
@@ -236,6 +262,8 @@ Snapshot rules:
 - `personas` is the dedup attribution — every persona that caught this finding.
 - `evidence` classifies what backs the finding, judged from the persona's support: `cited-spec` (quotes an external doc, spec, RFC, or API contract — e.g. RTFM citations), `code-site` (points to a specific `file:line` in the reviewed code as the proof), or `inference` (neither — reasoning about absence or likely behavior without a concrete citation). On disagreement take the strongest available (`cited-spec` > `code-site` > `inference`). This makes citation discipline minable and lets downstream tooling discount uncited high-severity claims.
 - `line` may be a range (`"42-45"`), a single line (`"42"`), or `null` for architectural-absence findings without coordinates.
+- `pass_support` (multiball only; `null` on single-pass runs): `{"<persona>": [k, N]}` for each catching persona — the finding appeared in k of that persona's N passes (e.g. `{"adv": [2, 2], "hyper": [1, 2]}`). You already compute this in Phase 1 reconciliation; stamping it here makes singleton-vs-consensus acceptance a mechanical join against dispositions.json instead of post-hoc fuzzy matching. Passes are exchangeable — record support *counts*, never pass indices ("found in run 2" is not a meaningful category).
+- `verification` is always `null` when you write the snapshot — the orchestrator's §5.7 apply step fills it with `{verdict, method, evidence}` after verifiers return. `verify_queue` holds your Phase 3.5 selection (empty array if nothing qualifies).
 - Use JSON `null` (not the string `"null"`) for unavailable values — token counts, durations, etc. Don't fabricate.
 - `resource_consumption` token fields are **legacy** — superseded by the per-Agent usage meter (`usage.json`, SKILL.md §8a), which is the cost source of truth. Leave them `null`; downstream cost/calibration analysis reads `usage.json`, not this block. Do not fabricate an input/output split to fill them.
 - The orchestrator passes `reader_mode` to you in the input block — pass it through.

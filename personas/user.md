@@ -4,7 +4,7 @@ default: yes
 modes: [diff, full]
 experimental: false
 requires:
-  any_of: [ui_surface, public_api, cli_entry, readme]
+  any_of: [ui_surface, public_api, cli_entry]  # readme dropped 2026-07-08 (ADR-07): near-universal signal; user runs when an actual user-facing surface exists (or by name)
 context:
   digest: no
   project_claude_md: no

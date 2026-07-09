@@ -1,6 +1,6 @@
 ---
 name: fresh
-default: yes
+default: opt-in  # demoted 2026-07-08 (ADR-07): 4% acceptance / 354k tok-per-accepted in leg 1; 0 strict catches + 1 anti-catch in legs 2-3
 modes: [diff, full]
 experimental: false
 requires:

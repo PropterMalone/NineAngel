@@ -14,7 +14,7 @@
 #   --findings    : read the persona's verbatim findings block from STDIN and
 #                   write it to $RUN_DIR/findings/<name>.md (explicit flag, not
 #                   tty-sniffing — unambiguous and testable)
-#   phase         : reader | persona | integrator (§3.4 schema)
+#   phase         : reader | persona | integrator | verifier (§3.4 schema)
 #   name          : [a-z0-9_-]+ only — it becomes a filename component; anything
 #                   else is rejected (review finding f34: path traversal /
 #                   surprise filenames via persona name)
@@ -43,8 +43,8 @@ fi
 RUN_DIR="$1"; PHASE="$2"; NAME="$3"; MODEL="$4"; TT="$5"; TU="$6"; DM="$7"; NOTE="${8:-}"
 
 [[ -d "$RUN_DIR" ]] || { echo "error: run dir not found: $RUN_DIR" >&2; exit 1; }
-case "$PHASE" in reader|persona|integrator) ;; *)
-  echo "error: phase must be reader|persona|integrator (got '$PHASE')" >&2; exit 1 ;;
+case "$PHASE" in reader|persona|integrator|verifier) ;; *)
+  echo "error: phase must be reader|persona|integrator|verifier (got '$PHASE')" >&2; exit 1 ;;
 esac
 [[ "$NAME" =~ ^[a-z0-9_-]+$ ]] || { echo "error: name must match [a-z0-9_-]+ (got '$NAME')" >&2; exit 1; }
 for v in "$TT" "$TU" "$DM"; do

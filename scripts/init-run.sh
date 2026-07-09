@@ -6,15 +6,39 @@
 # condition 4 closes: stdout is exactly three eval-able assignments, so the
 # orchestrator does `eval "$(init-run.sh [PROJECT_DIR])"` and cannot drift.
 #
-# Usage: eval "$(init-run.sh [PROJECT_DIR])"   # PROJECT_DIR defaults to $(pwd)
+# Usage: eval "$(init-run.sh [PROJECT_DIR] [--experiment [REASON]])"
+#   PROJECT_DIR defaults to $(pwd). --experiment writes an EXPERIMENT marker
+#   file (ISO date + optional reason) into the run dir, so finalize-run's
+#   dispositions skeleton tags the run experiment:true — untriaged findings
+#   from experiment runs stay distinguishable from neglected live ones.
 set -euo pipefail
+
+EXPERIMENT=0; EXPERIMENT_REASON=""; POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --experiment)
+      EXPERIMENT=1; shift
+      # optional reason: consume the next arg unless it's another flag —
+      # so pass PROJECT_DIR before --experiment, not after.
+      if [[ $# -gt 0 && "$1" != --* ]]; then EXPERIMENT_REASON="$1"; shift; fi
+      ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
 
 RUNS_ROOT="${ANGEL_RUNS_ROOT:-$HOME/.angel/runs}"   # override for tests
 RUN_DIR="$RUNS_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$(uuidgen 2>/dev/null | cut -c1-8 || echo "$$")"
 mkdir -p "$RUN_DIR/findings"
 : > "$RUN_DIR/usage.jsonl"
+if [[ "$EXPERIMENT" -eq 1 ]]; then
+  if [[ -n "$EXPERIMENT_REASON" ]]; then
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$EXPERIMENT_REASON" > "$RUN_DIR/EXPERIMENT"
+  else
+    printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RUN_DIR/EXPERIMENT"
+  fi
+fi
 
-PROJECT_DIR="${1:-$(pwd)}"
+PROJECT_DIR="${POSITIONAL[0]:-$(pwd)}"
 # slash→dash encoding kept deliberately: it mirrors Claude Code's own
 # per-project memory-dir convention; changing it would orphan every existing
 # memory dir. Known limits: distinct paths can collide (/a/b vs /a-b), and

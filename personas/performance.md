@@ -4,7 +4,7 @@ default: yes
 modes: [diff, full]
 experimental: false
 requires:
-  any_of: [runtime_code, hot_path_indicators]
+  any_of: [hot_path_indicators]  # runtime_code dropped 2026-07-08 (ADR-07): near-universal signal made the gate unconditional; perf runs when a hot-path shape actually exists (or by name)
 context:
   digest: yes
   project_claude_md: yes

@@ -252,6 +252,8 @@ rc=0; "$DIR/record-dispatch.sh" "$RRD" persona 'Bad Name' m null null null </dev
 rc_is $rc 1 "non-[a-z0-9_-] persona name rejected"
 rc=0; "$DIR/record-dispatch.sh" "$RRD" bogus rtfm m null null null </dev/null >/dev/null 2>&1 || rc=$?
 rc_is $rc 1 "unknown phase rejected"
+rdv="$("$DIR/record-dispatch.sh" "$RRD" verifier f3 claude-sonnet-4-6 7000 3 30000 </dev/null)"
+has '"phase":"verifier"' "$rdv" "verifier phase accepted (verification stage)"
 rc=0; "$DIR/record-dispatch.sh" "$RRD" persona rtfm m 12x3 null null </dev/null >/dev/null 2>&1 || rc=$?
 rc_is $rc 1 "non-integer token count rejected"
 
@@ -268,6 +270,18 @@ case "$RUN_DIR" in "$ANGEL_RUNS_ROOT"/*) ok "RUN_DIR under ANGEL_RUNS_ROOT";; *)
 [ "$ENCODED_CWD" = "${SYNTH_PROJ//\//-}" ] && ok "ENCODED_CWD encodes project dir" || bad "ENCODED_CWD encodes project dir" "got: $ENCODED_CWD"
 [ -d "$HANDOFF_DIR" ] && ok "HANDOFF_DIR exists" || bad "HANDOFF_DIR exists" "got: $HANDOFF_DIR"
 case "$HANDOFF_DIR" in "$TMP/home"/*) ok "HANDOFF_DIR honors HOME override (nothing outside temp)";; *) bad "HANDOFF_DIR honors HOME override" "got: $HANDOFF_DIR";; esac
+[ ! -e "$RUN_DIR/EXPERIMENT" ] && ok "no EXPERIMENT marker without --experiment" || bad "no EXPERIMENT marker without --experiment"
+rc=0; iexp="$(HOME="$TMP/home" "$DIR/init-run.sh" "$SYNTH_PROJ" --experiment "roster swap trial")" || rc=$?
+rc_is $rc 0 "init-run --experiment exits 0"
+[ "$(printf '%s\n' "$iexp" | wc -l)" -eq 3 ] && ok "--experiment keeps exactly 3 stdout lines (eval contract)" || bad "--experiment keeps exactly 3 stdout lines (eval contract)" "got: $iexp"
+RUN_DIR=""; eval "$iexp"; EXP_RUN_DIR="$RUN_DIR"
+[ -f "$EXP_RUN_DIR/EXPERIMENT" ] && ok "--experiment writes EXPERIMENT marker" || bad "--experiment writes EXPERIMENT marker"
+[ "$(wc -l < "$EXP_RUN_DIR/EXPERIMENT")" -eq 1 ] && ok "EXPERIMENT marker is a single line" || bad "EXPERIMENT marker is a single line"
+mline="$(cat "$EXP_RUN_DIR/EXPERIMENT")"
+case "$mline" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z" roster swap trial") ok "marker line is ISO date + reason";;
+  *) bad "marker line is ISO date + reason" "got: $mline";;
+esac
 
 echo "== aggregate-usage.py =="
 RAG="$ANGEL_RUNS_ROOT/20260601T120000Z-fixture1"
@@ -300,11 +314,87 @@ grep -q "persona:adv" "$RAG/UNMEASURED.md" && ok "UNMEASURED.md written with unm
 echo "== finalize-run.sh =="
 rc=0; "$DIR/finalize-run.sh" "$RAG" >/dev/null 2>&1 || rc=$?; rc_is $rc 0 "finalize-run exits 0 on complete fixture"
 grep -q "run:$RAG" "$ANGEL_USAGE_LOG" && ok "finalize-run appended usage.log line" || bad "finalize-run appended usage.log line"
+rc=0; python3 -c "
+import json
+d = json.load(open('$RAG/dispositions.json'))
+assert sorted(d) == ['f1','f2','f3','f4'], d
+assert all(v['disposition'] == 'no-record' for v in d.values()), d
+" || rc=$?
+rc_is $rc 0 "finalize-run stage 4 emitted dispositions skeleton"
 RBAD="$ANGEL_RUNS_ROOT/20260601T130000Z-fixture2"   # no findings-snapshot.json -> completeness gate fails
 mkdir -p "$RBAD/findings"; echo "stub" > "$RBAD/findings/rtfm.md"; : > "$RBAD/usage.jsonl"
 rc=0; ferr="$("$DIR/finalize-run.sh" "$RBAD" 2>&1 >/dev/null)" || rc=$?
 [ "$rc" -ne 0 ] && ok "finalize-run exits nonzero on incomplete fixture" || bad "finalize-run exits nonzero on incomplete fixture"
 has "check-run-complete" "$ferr" "finalize-run stderr names the failing stage"
+
+echo "== emit-dispositions-skeleton.py =="
+SKROOT="$TMP/skelruns"; mkdir -p "$SKROOT"
+SK="$SKROOT/r_skel"; mkdir -p "$SK/findings"; mk_snapshot "$SK"
+rc=0; sout="$(ANGEL_RUNS_ROOT="$SKROOT" "$DIR/emit-dispositions-skeleton.py" "$SK")" || rc=$?
+rc_is $rc 0 "skeleton emit exits 0"
+rc=0; python3 - "$SK" <<'PY' || rc=$?
+import json, sys
+d = json.load(open(sys.argv[1] + "/dispositions.json"))
+assert sorted(d) == ["f1", "f2", "f3", "f4"], d
+assert all(v == {"disposition": "no-record", "note": "", "recorded_at": None}
+           for v in d.values()), d
+print("skel-asserts-ok")
+PY
+rc_is $rc 0 "skeleton has every snapshot id at no-record (record-disposition entry schema)"
+hasnt "experiment" "$(cat "$SK/dispositions.json")" "no experiment key without EXPERIMENT marker"
+# idempotency: a recorded disposition survives a re-emit byte-for-byte
+ANGEL_RUNS_ROOT="$SKROOT" "$DIR/record-disposition.py" "$SK" f1 accepted >/dev/null
+cp "$SK/dispositions.json" "$TMP/disp.before"
+rc=0; sout2="$(ANGEL_RUNS_ROOT="$SKROOT" "$DIR/emit-dispositions-skeleton.py" "$SK")" || rc=$?
+rc_is $rc 0 "re-emit over existing dispositions.json exits 0"
+has "already exists" "$sout2" "re-emit reports the no-op"
+cmp -s "$TMP/disp.before" "$SK/dispositions.json" && ok "existing dispositions.json untouched (idempotent)" || bad "existing dispositions.json untouched (idempotent)"
+rc=0; ANGEL_RUNS_ROOT="$SKROOT" "$DIR/emit-dispositions-skeleton.py" /etc >/dev/null 2>&1 || rc=$?
+rc_is $rc 1 "write outside runs-root rejected"
+# EXPERIMENT marker -> top-level experiment:true, preserved by record-disposition
+SKE="$SKROOT/r_skel_exp"; mkdir -p "$SKE/findings"; mk_snapshot "$SKE"
+printf '2026-07-08T00:00:00Z eval leg 2\n' > "$SKE/EXPERIMENT"
+ANGEL_RUNS_ROOT="$SKROOT" "$DIR/emit-dispositions-skeleton.py" "$SKE" >/dev/null
+rc=0; python3 -c "
+import json
+d = json.load(open('$SKE/dispositions.json'))
+assert d.get('experiment') is True, d
+assert d['f1']['disposition'] == 'no-record', d
+" || rc=$?
+rc_is $rc 0 "EXPERIMENT marker -> top-level experiment:true in skeleton"
+ANGEL_RUNS_ROOT="$SKROOT" "$DIR/record-disposition.py" "$SKE" f1 accepted >/dev/null
+rc=0; python3 -c "
+import json
+d = json.load(open('$SKE/dispositions.json'))
+assert d.get('experiment') is True, d
+assert d['f1']['disposition'] == 'accepted', d
+" || rc=$?
+rc_is $rc 0 "record-disposition preserves experiment:true on upsert"
+rc=0; ANGEL_RUNS_ROOT="$SKROOT" "$DIR/record-disposition.py" "$SKE" experiment accepted 2>/dev/null || rc=$?
+rc_is $rc 1 "finding id 'experiment' rejected (reserved marker key)"
+# init-run --experiment marker propagates through the skeleton
+mk_snapshot "$EXP_RUN_DIR"
+"$DIR/emit-dispositions-skeleton.py" "$EXP_RUN_DIR" >/dev/null
+rc=0; python3 -c "
+import json
+d = json.load(open('$EXP_RUN_DIR/dispositions.json'))
+assert d.get('experiment') is True, d
+" || rc=$?
+rc_is $rc 0 "init-run --experiment marker propagates to skeleton experiment:true"
+# mine-runs: no-record placeholders are untriaged, not disposed
+SKN="$SKROOT/r_skel_untriaged"; mkdir -p "$SKN/findings"; mk_snapshot "$SKN"
+ANGEL_RUNS_ROOT="$SKROOT" "$DIR/emit-dispositions-skeleton.py" "$SKN" >/dev/null
+mjson2="$("$DIR/mine-runs.py" --runs-dir "$SKROOT" --since 2026-05-31 --json)"
+rc=0; python3 - "$mjson2" <<'PY' || rc=$?
+import json, sys
+d = json.loads(sys.argv[1])
+rt = d["personas"]["rtfm"]
+assert rt["disposed"] == 2, rt        # f1 accepted in r_skel + r_skel_exp; no-record excluded
+assert rt["false_positives"] == 0, rt
+assert d["coverage"]["with_dispositions"] == 2, d["coverage"]  # skeleton-only run not counted
+print("norecord-asserts-ok")
+PY
+rc_is $rc 0 "mine-runs: no-record excluded from disposed; skeleton-only run not with-dispositions"
 
 echo "== finalize-calibration =="
 FC_HOME="$TMP/fchome"; mkdir -p "$FC_HOME"
@@ -354,6 +444,125 @@ rc=0; f8out="$(HOME="$FC_HOME" ANGEL_USAGE_LOG="$F8LOG" "$DIR/finalize-calibrati
 rc_is $rc 0 "f8 fixture dry-run exits 0"
 has "lostC=1" "$f8out" "distinct same-file no-line findings do NOT collapse (dropped critical counts as lost)"
 has "gainC=0" "$f8out" "same-file same-title no-line finding still matches (not gained)"
+
+echo "== apply-verification.py =="
+AV="$ANGEL_RUNS_ROOT/20260601T140000Z-verify1"
+mk_usage "$AV" 80000; echo "stub" > "$AV/findings/adv.md"
+cat > "$AV/findings-snapshot.json" <<'JSON'
+{"version":2,"project":"demo","mode":"full","verdict":"CHANGES REQUIRED",
+ "personas_run":["adv","rtfm"],"verify_queue":["f1","f2"],
+ "findings":[
+  {"id":"f1","severity":"critical","title":"Crit one","personas":["adv"],"verification":null},
+  {"id":"f2","severity":"important","title":"Imp two","personas":["rtfm"],"verification":null},
+  {"id":"f3","severity":"minor","title":"Min three","personas":["rtfm"],"verification":null}
+ ]}
+JSON
+printf '# Code Review — CHANGES REQUIRED\n\n## Critical\n\n- stuff\n\n---\n\n*Review by NineAngel — 2026-06-01*\n' > "$AV/report.md"
+cp "$AV/findings-snapshot.json" "$TMP/snap.orig"
+# zero verdict files (missing dir, then empty dir) -> no-op exit 0, nothing written
+rc=0; nout="$("$DIR/apply-verification.py" "$AV")" || rc=$?
+rc_is $rc 0 "no verification dir -> exit 0"
+has "no verdicts to apply" "$nout" "missing-dir no-op message emitted"
+mkdir -p "$AV/verification"
+rc=0; nout="$("$DIR/apply-verification.py" "$AV")" || rc=$?
+rc_is $rc 0 "empty verification dir -> exit 0"
+has "no verdicts to apply" "$nout" "empty-dir no-op message emitted"
+cmp -s "$TMP/snap.orig" "$AV/findings-snapshot.json" && ok "no-op leaves snapshot untouched" || bad "no-op leaves snapshot untouched"
+[ ! -e "$AV/verification-summary.md" ] && ok "no-op writes no summary" || bad "no-op writes no summary"
+# happy path: REFUTED + CONFIRMED + unknown-id verdict
+cat > "$AV/verification/f1.json" <<'JSON'
+{"id":"f1","verdict":"REFUTED","method":"ran","evidence":"repro script shows the guard already covers this","note":"n"}
+JSON
+cat > "$AV/verification/f2.json" <<'JSON'
+{"id":"f2","verdict":"CONFIRMED","method":"traced","evidence":"traced call path to unsanitized sink"}
+JSON
+cat > "$AV/verification/f9.json" <<'JSON'
+{"id":"f9","verdict":"CONFIRMED","method":"ran","evidence":"ghost finding"}
+JSON
+rc=0; averr="$("$DIR/apply-verification.py" "$AV" 2>&1 >/dev/null)" || rc=$?
+rc_is $rc 0 "apply exits 0 despite unknown verdict id"
+has "f9" "$averr" "unknown finding id warned to stderr"
+rc=0; python3 - "$AV" <<'PY' || rc=$?
+import json, sys
+s = json.load(open(sys.argv[1] + "/findings-snapshot.json"))
+by = {f["id"]: f for f in s["findings"]}
+assert by["f1"]["verification"] == {"verdict": "REFUTED", "method": "ran",
+    "evidence": "repro script shows the guard already covers this"}, by["f1"]  # note NOT copied
+assert by["f2"]["verification"]["verdict"] == "CONFIRMED", by["f2"]
+assert by["f3"]["verification"] is None, by["f3"]           # no verdict -> stays null
+assert s["verify_queue"] == ["f1", "f2"], s["verify_queue"] # queue untouched
+print("av-asserts-ok")
+PY
+rc_is $rc 0 "verdicts patched into snapshot; verdict-less finding stays null"
+sm="$(cat "$AV/verification-summary.md")"
+has "## Verification" "$sm" "summary has section heading"
+has "REFUTED:**" "$sm" "bold warning line above REFUTED items"
+has "- **CONFIRMED** f2 (important) — Imp two — traced call path to unsanitized sink" "$sm" "verdict line format: - **verdict** id (severity) — title — evidence"
+lr="$(grep -nF '**REFUTED** f1' "$AV/verification-summary.md" | cut -d: -f1)"
+lc="$(grep -nF '**CONFIRMED** f2' "$AV/verification-summary.md" | cut -d: -f1)"
+[ -n "$lr" ] && [ -n "$lc" ] && [ "$lr" -lt "$lc" ] && ok "REFUTED listed before CONFIRMED" || bad "REFUTED listed before CONFIRMED" "refuted@$lr confirmed@$lc"
+has "All verified Criticals were REFUTED" "$sm" "all-criticals-refuted warning fires (only Critical refuted)"
+[ "$(grep -c '^## Verification$' "$AV/report.md")" = 1 ] && ok "report.md gained one ## Verification section" || bad "report.md gained one ## Verification section"
+has "All verified Criticals were REFUTED" "$(cat "$AV/report.md")" "report section carries the summary content"
+# idempotent double-run: snapshot + summary + report all byte-identical
+cp "$AV/findings-snapshot.json" "$TMP/snap.after1"; cp "$AV/verification-summary.md" "$TMP/sum.after1"; cp "$AV/report.md" "$TMP/rep.after1"
+rc=0; "$DIR/apply-verification.py" "$AV" >/dev/null 2>/dev/null || rc=$?
+rc_is $rc 0 "second run exits 0"
+cmp -s "$TMP/snap.after1" "$AV/findings-snapshot.json" && ok "snapshot byte-identical after second run" || bad "snapshot byte-identical after second run"
+cmp -s "$TMP/sum.after1" "$AV/verification-summary.md" && ok "summary byte-identical after second run" || bad "summary byte-identical after second run"
+cmp -s "$TMP/rep.after1" "$AV/report.md" && ok "report.md byte-identical after second run (no duplicate section)" || bad "report.md byte-identical after second run"
+# changed verdict -> report section replaced in place, never duplicated
+cat > "$AV/verification/f2.json" <<'JSON'
+{"id":"f2","verdict":"PLAUSIBLE","method":"traced","evidence":"sink reachable but input already validated upstream"}
+JSON
+"$DIR/apply-verification.py" "$AV" >/dev/null 2>/dev/null
+[ "$(grep -c '^## Verification$' "$AV/report.md")" = 1 ] && ok "re-run replaces report section (still exactly one)" || bad "re-run replaces report section (still exactly one)" "$(grep -c '^## Verification$' "$AV/report.md") sections"
+has "PLAUSIBLE" "$(cat "$AV/report.md")" "replaced section carries the new verdict"
+hasnt "CONFIRMED" "$(cat "$AV/report.md")" "stale verdict gone from report after replace"
+# new schema keys must not break the completeness gate (verification NOT gated in v1)
+"$DIR/append-usage-log.sh" "$AV" >/dev/null
+rc=0; "$DIR/check-run-complete.py" "$AV" >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "check-run-complete passes with verify_queue/verification keys"
+# all-criticals-refuted gating: an unverified Critical blocks the warning
+AV2="$ANGEL_RUNS_ROOT/20260601T150000Z-verify2"
+mkdir -p "$AV2/verification" "$AV2/findings"
+cat > "$AV2/findings-snapshot.json" <<'JSON'
+{"version":2,"verify_queue":["f1","f2"],"findings":[
+ {"id":"f1","severity":"critical","title":"C1","personas":["adv"],"verification":null},
+ {"id":"f2","severity":"critical","title":"C2","personas":["adv"],"verification":null}
+]}
+JSON
+cat > "$AV2/verification/f1.json" <<'JSON'
+{"id":"f1","verdict":"REFUTED","method":"traced","evidence":"code path not reachable"}
+JSON
+"$DIR/apply-verification.py" "$AV2" >/dev/null 2>/dev/null
+hasnt "All verified Criticals" "$(cat "$AV2/verification-summary.md")" "unverified Critical blocks the all-refuted warning"
+cat > "$AV2/verification/f2.json" <<'JSON'
+{"id":"f2","verdict":"REFUTED","method":"ran","evidence":"the failing test passes on main"}
+JSON
+"$DIR/apply-verification.py" "$AV2" >/dev/null 2>/dev/null
+has "All verified Criticals were REFUTED" "$(cat "$AV2/verification-summary.md")" "warning fires once every Critical is refuted"
+
+echo "== aggregate-usage.py (verifier phase) =="
+RAV="$ANGEL_RUNS_ROOT/20260601T160000Z-verify3"
+mkdir -p "$RAV/findings"; echo "stub" > "$RAV/findings/adv.md"
+cat > "$RAV/usage.jsonl" <<'JSONL'
+{"phase":"persona","name":"adv","model":"claude-sonnet-4-6","total_tokens":50000,"tool_uses":10,"duration_ms":60000,"started_at":"2026-06-01T16:05:00Z","ended_at":"2026-06-01T16:06:00Z","reader_pack":false}
+{"phase":"verifier","name":"f1","model":"claude-sonnet-4-6","total_tokens":7000,"tool_uses":3,"duration_ms":30000,"started_at":null,"ended_at":null,"reader_pack":false}
+{"phase":"verifier","name":"f2","model":"claude-sonnet-4-6","total_tokens":null,"tool_uses":null,"duration_ms":null,"started_at":null,"ended_at":null,"reader_pack":false,"note":"unmeasured"}
+JSONL
+rc=0; python3 "$DIR/aggregate-usage.py" "$RAV" >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "aggregate-usage exits 0 with verifier-phase lines"
+rc=0; python3 - "$RAV" <<'PY' || rc=$?
+import json, sys
+u = json.load(open(sys.argv[1] + "/usage.json"))
+assert u["totals"]["total_tokens"] == 57000, u["totals"]["total_tokens"]  # verifier tokens counted
+assert u["unmeasured"] == ["verifier:f2"], u["unmeasured"]                # null verifier surfaces
+assert len(u["totals"]["personas"]) == 1, u["totals"]["personas"]         # not misfiled as personas
+assert u["totals"]["integrator"] is None, u["totals"]["integrator"]      # nor as integrator
+print("rav-asserts-ok")
+PY
+rc_is $rc 0 "verifier lines aggregate into totals; not misfiled per-phase"
 
 echo
 echo "--- subsample-analyzer + shared matcher suite (test_subsample.py) ---"

@@ -4,7 +4,7 @@ default: yes
 modes: [diff, full]
 experimental: false
 requires:
-  any_of: [tests_dir_or_files, package_json]
+  any_of: [tests_dir_or_files]  # package_json dropped 2026-07-08 (ADR-07): a manifest is not a test signal; it made the gate unconditional-in-practice
 context:
   digest: yes
   project_claude_md: yes

@@ -143,7 +143,11 @@ def main():
         if usage:
             with_usage += 1
         dispmap = load_dispositions(d)
-        if dispmap:
+        # finalize-run now emits a skeleton with every finding at "no-record"
+        # (plus an optional top-level experiment:true bool) — placeholders,
+        # not triage. Only real dispositions count toward coverage/precision.
+        if any(isinstance(v, dict) and v.get("disposition") not in (None, "no-record")
+               for v in dispmap.values()):
             runs_with_disp += 1
         if any(f.get("evidence") for f in (data.get("findings") or [])):
             runs_with_evidence += 1
@@ -175,6 +179,8 @@ def main():
             fid = f.get("id")
             d_entry = dispmap.get(fid) if fid else None
             d_val = d_entry.get("disposition") if isinstance(d_entry, dict) else None
+            if d_val == "no-record":
+                d_val = None  # skeleton placeholder = untriaged, not disposed
             if sev == "critical":
                 criticals.append((date, project, f.get("title") or "(untitled)", ",".join(ps)))
             for p in ps:

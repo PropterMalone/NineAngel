@@ -3,9 +3,11 @@
 # One mechanical end-of-run gate — SKILL.md §8a-c in a single call, so a run
 # record cannot be left half-written by orchestrator drift (ADR-03 reboot
 # condition 4: run-record completeness enforced, not disciplined). Runs:
-#   1. aggregate-usage.py     usage.jsonl -> usage.json (§8a)
-#   2. append-usage-log.sh    canonical usage.log line   (§8b)
-#   3. check-run-complete.py  completeness gate          (§8c)
+#   1. aggregate-usage.py            usage.jsonl -> usage.json (§8a)
+#   2. append-usage-log.sh           canonical usage.log line   (§8b)
+#   3. check-run-complete.py         completeness gate          (§8c)
+#   4. emit-dispositions-skeleton.py dispositions.json skeleton — every
+#      finding starts "no-record", so non-triage is recorded, not inferred
 # Stops at the first failure, naming the failing stage on stderr.
 #
 # Usage: finalize-run.sh <RUN_DIR> [RUN_TAG]
@@ -30,3 +32,4 @@ else
   stage "append-usage-log.sh" "$SCRIPT_DIR/append-usage-log.sh" "$RUN_DIR"
 fi
 stage "check-run-complete.py" python3 "$SCRIPT_DIR/check-run-complete.py" "$RUN_DIR"
+stage "emit-dispositions-skeleton.py" python3 "$SCRIPT_DIR/emit-dispositions-skeleton.py" "$RUN_DIR"
