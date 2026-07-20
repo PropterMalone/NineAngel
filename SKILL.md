@@ -17,7 +17,8 @@ Arguments from the user invocation (after `/angel`):
 - `--loop` → enable review loop (review → fix → re-review, max 3 cycles)
 - `--multiball[=N]` → run each invoked persona N independent times; the integrator reconciles. **Default-ON at N=2 for interactive runs** (ADR-06, 2026-06-20, supersedes the ADR-05 N=5 starting point). Rationale: multiball's value concentrates in the 1→2 jump — a second independent pass catches the single-pass stochastic misses — so N=2 keeps the high-value pass at ~50% less cost than N=5. **Escalation to N=3** fires automatically when `--full` or `--all` is passed (whole-project / full-battery runs are higher-leverage and larger-input, so the marginal third pass is worth it), and on demand via `--balls N`. Pass `--multiball=N` or `--balls N` to override N for any run (an explicit override always wins over the auto-escalation). **Unattended (`claude -p`) stays single-pass** — multiball is interactive-only.
 - `--balls N` → explicit multiball pass-count override for this run (alias for `--multiball=N`). Overrides both the N=2 default and the `--full`/`--all` auto-escalation.
-- `--cross` → after the persona battery + integrator, run a **cross-model second opinion** (`~/.claude/scripts/xreview.py`) on the same diff using a DIFFERENT model than Claude — the one model-independence axis the same-model battery (personas + multiball all share Claude's blind spots) structurally cannot cover. Backend auto-routes: GSD-project cwd → `codex` (OpenAI), else → `agy` (Antigravity/Gemini, $0). Its gated findings (verbatim-quote + 0.6-confidence) and its agree/refute verdicts on Angel's own findings append as a clearly-labeled section. Opt-in; see §5.6. Every run self-logs to `~/.claude/state/xreview-runs.jsonl` for the periodic "did it earn its keep" evaluation (trial through ~2026-07-07).
+- `--cross` → after the persona battery + integrator, run a **cross-model second opinion** (`~/.claude/scripts/xreview.py`) on the same diff using a DIFFERENT model than Claude — the one model-independence axis the same-model battery (personas + multiball all share Claude's blind spots) structurally cannot cover. Backend auto-routes: GSD-project cwd → `codex` (OpenAI), else → `agy` (Antigravity/Gemini, $0). Its gated findings (verbatim-quote + 0.6-confidence) and its agree/refute verdicts on Angel's own findings append as a clearly-labeled section. See §5.6. **Default-on for every interactive run** (2026-07-18, the user — `agy`/Gemini is `$0` and model-independence is the one axis the same-model battery can't cover; supersedes the 2026-07-15 ADR-10 `--full`/`--all`-only auto-attach). `--no-cross` suppresses it; explicit `--cross` is now a no-op affirmation on interactive runs. Unattended (`claude -p`) stays opt-in. Every run self-logs to `~/.claude/state/xreview-runs.jsonl` (now with `had_angel_report` + per-finding `fid`) for the "did it earn its keep" evaluation; record real-vs-noise via `xreview-disposition.py`.
+- `--no-cross` → suppress the default cross-model leg (§5.6) for a run that shouldn't pay for the extra backend call.
 - `--no-multiball` / `--single` → force single-pass (N=1); the off-switch now that multiball is default-ON for interactive runs.
 - `--no-verify` → skip the adversarial verification stage (§5.7). Default: verification ON whenever the integrator's `verify_queue` is non-empty (ADR-08).
 - `--micro` → the minimal-core profile for routine mid-development checks (ADR-09): battery = **adv + hyper**, plus **data-int** when its `requires.any_of` signals fire — nothing else; §1.5 detection is bypassed. N=2 as always. **Inline integration is this profile's default** (§5 — a ≤4-persona output set doesn't need a 1M-window integrator dispatch), and the §5.7 verification stage still applies. ~0.4–0.6M tokens vs 1.0–1.6M for a standard run — the only sub-1M review option (measured 2026-07-08: /code-review at any effort ≈ 4M all-bucket, an equivalent, not a lighter tier).
@@ -57,13 +58,13 @@ Integrator → selected per §5 ladder (Fable[1m] → Opus[1m] → inline; ADR-0
 |---------|------|---------|---|-------------|--------|
 | **micro** (`--micro`) | routine mid-dev checks | adv + hyper (+ data-int if signaled) | 2 | inline | table, minus unneeded lanes |
 | **standard** (no flag) | pre-merge milestones | §1.5 auto-detected | 2 | integrator dispatch | table, **except future + test → `claude-sonnet-5[1m]`** |
-| **full** (`--full` / `--all`) | pre-ship, public-facing, customer-touching | full battery | 3 (ADR-06 escalation) | integrator dispatch | table verbatim (full Fable complement); consider `--cross` |
+| **full** (`--full` / `--all`) | pre-ship, public-facing, customer-touching | full battery | 3 (ADR-06 escalation) | integrator dispatch | table verbatim (full Fable complement); **cross leg auto-attached** (§5.6, `--no-cross` to skip) |
 
 The standard-profile future/test demotion is the Fable-rationing rule: leg 3 shows their sonnet floors are serviceable and the Fable gain is contract-tracing depth — reserved for the stakes tier that needs completed causal chains. The §1 model table remains the source of truth for full-profile (and lapse-ladder) assignments; the standard-profile exception is this row note, deliberately narrow.
 
 **Frequency (the bigger half of the token savings):** run Angel at *milestones* — pre-merge, pre-ship, public artifacts — reviewing accumulated commits together, not per working diff. Findings persist across runs on lightly-changed code (recurrence pilot), so back-to-back standard runs mostly re-buy the same findings; findings-per-token scales with novel code per run. Mid-development sanity checks are what `--micro` exists for.
 
-**Fable-lapse ladder (eval leg 3, 2026-07-02 — ADR-07).** The Fable rows above assume Fable is available on-subscription. When it lapses: thousand, data-int, future, blindspot, coach, rigor, deanon → `claude-opus-4-8[1m]`; **test → Sonnet, not Opus** (on the seeded benchmark Opus-test ≈ sonnet-test at ~5× the cost — leg-3 Q2/Q3). Keep multiball at N=2 on Opus lanes: Opus pass-to-pass stability is .78 vs Fable's .95, so the second pass recovers real findings there in a way it doesn't on a saturating Fable battery.
+**Fable-lapse ladder (eval leg 3, 2026-07-02 — ADR-07).** The Fable rows above assume Fable is available on-subscription. Lapses are normally CYCLIC, not terminal (the user 2026-07-09): Fable's weekly quota is lower than the total quota, so it exhausts mid-cycle and returns at the weekly reset — check availability at dispatch time, don't carry a "Fable is gone" belief across sessions. When it lapses: thousand, data-int, future, blindspot, coach, rigor, deanon → `claude-opus-4-8[1m]`; **test → Sonnet, not Opus** (on the seeded benchmark Opus-test ≈ sonnet-test at ~5× the cost — leg-3 Q2/Q3). Keep multiball at N=2 on Opus lanes: Opus pass-to-pass stability is .78 vs Fable's .95, so the second pass recovers real findings there in a way it doesn't on a saturating Fable battery.
 
 Each persona declares its `default` (yes/opt-in), `modes` (diff/full), `experimental`, and required signals in YAML frontmatter at the top of `personas/{short}.md`. The frontmatter is the source of truth for selection.
 
@@ -225,10 +226,10 @@ It appends the schema-correct JSONL line (pass `--reader-pack` when the dispatch
 Schema (one line per dispatch):
 
 ```json
-{"phase":"reader|persona|integrator|verifier","name":"<short-name>","model":"<model-id>","total_tokens":<int>,"tool_uses":<int>,"duration_ms":<int>,"started_at":"<ISO-8601>","ended_at":"<ISO-8601>","reader_pack":<bool>,"note":"<optional>"}
+{"phase":"reader|persona|reconciler|integrator|verifier","name":"<short-name>","model":"<model-id>","total_tokens":<int>,"tool_uses":<int>,"duration_ms":<int>,"started_at":"<ISO-8601>","ended_at":"<ISO-8601>","reader_pack":<bool>,"note":"<optional>"}
 ```
 
-- `phase` — one of `reader`, `persona`, `integrator`, `verifier`
+- `phase` — one of `reader`, `persona`, `reconciler` (Stage-1 per-persona reconciliation, ADR-11), `integrator`, `verifier`
 - `name` — persona short name (e.g. `"naive"`), or `"reader"` / `"integrator"` for those phases
 - `model` — exact model id used for the dispatch
 - `total_tokens` — sum from the Agent return. If the calling context didn't expose `total_tokens`, write `null` and set `"note":"unmeasured"`. Do NOT silently drop — that's the failure mode the an early A/B/C calibration surfaced.
@@ -569,41 +570,61 @@ Compose the integrator's prompt from `~/.claude/skills/angel/integrator.md` plus
 
 ...
 
-{if multiball mode: ALSO include a `**within_persona_runs**:` block — in ADDITION to the per-persona outputs above (the integrator needs both the reconciled view AND the raw passes). Shape: for each persona, its N verbatim finding blocks, each labeled with its pass number:
+{if multiball mode (hierarchical — ADR-11, the default): replace the `**Persona outputs**` blocks above with a pointer to the Stage-1 reconciled views:
 ```
-**within_persona_runs**:
-#### Naive — pass 1
-{verbatim Naive pass-1 block}
-#### Naive — pass 2
-{verbatim Naive pass-2 block}
-#### Adversarial — pass 1
-{verbatim Adversarial pass-1 block}
-...
+**reconciled_views**: {RUN_DIR}/reconciled/ — one {persona}.md (reconciled finding block, (k/N passes) tags) + one {persona}-passes.json (structured within_persona_runs fragment) per persona. Read ALL of them; treat each {persona}.md as that persona's finding block, and assemble the fragments into the snapshot's within_persona_runs verbatim (integrator.md Phase 1, hierarchical mode).
 ```
-The integrator parses each labeled block into the structured per-pass snapshot field (integrator.md Phase 1).}
+Legacy inline shape — only when Stage 1 was skipped or failed wholesale: include the raw `**within_persona_runs**:` block (per persona, its N verbatim finding blocks labeled `#### {Persona} — pass i`) and the integrator performs full Phase-1 reconciliation itself.}
 {if --loop cycle >1: include a `**previous_cycle_report**:` block with the previous cycle's report verbatim}
 {if any personas were skipped by §1.5: include a `**dropped_personas**: [{name: reason}, ...]` block so the integrator can note it in the report}
 {if any persona dispatches failed (§4 failure capture): include a `**failed_personas**: [{name, reason}, ...]` block so the integrator renders the Coverage Gaps banner}
 ```
 
+### Stage 1 — per-persona reconcilers (multiball only; ADR-11)
+
+Before the integrator, when the run is multiball (N≥2): dispatch one **Stage-1 Reconciler** per persona, all in parallel (batch ≤8 per message). Each reconciles its persona's N passes into a single view (`naive1 + naive2 + naive3 → naive′`) so the Stage-2 integrator reads ~10 compact reconciled files instead of 20+ raw passes — the input-size + turn-shape reduction that kills the big-bundle stall mode (ADR-11 root-cause: giant single turns on Fable). Reconcilers never cross persona lanes — persona independence is untouched; only within-persona resamples (where independence was never claimed) are merged.
+
+Per reconciler dispatch:
+- Model: `claude-sonnet-5[1m]` — reconciliation is mechanical within-lane comparison, not discovery.
+- Prompt: point at `~/.claude/skills/angel/reconciler.md` by path (dispatch-by-path, as with personas) + an inputs block: persona short/display name, the N pass-file paths (`$RUN_DIR/passes/{persona}-p{i}.md` — write pass files there as passes land, §4), and `$RUN_DIR`. The reconciler WRITES `$RUN_DIR/reconciled/{persona}.md` + `{persona}-passes.json` and returns a ≤100-word confirmation.
+- Record each per §3.4 (`"phase":"reconciler"`).
+- A reconciler that fails/stalls (>5 min): retry once on sonnet; on second failure, skip Stage 1 *for that persona only* — pass its raw pass files to the integrator via the legacy inline shape and note it in Integration Notes.
+
+Single-pass runs (`--single`, unattended) skip Stage 1 entirely.
+
 ### Dispatching the integrator (bounded — a hung integrator must not stall the whole run)
 
-The integrator is the heaviest subagent and the only load-bearing one: it runs alone, last, after every persona, and the run has no report without it. Dispatched naively it inherits the session default model and blocks this context until it returns — so when it stalls, the review goes silently quiet until a human notices and finishes integration by hand. That is what hung the 2026-06-09 meta run (7860s wall) and the 2026-06-10 diff run on a second project, both right after the Fable-5 default switch (docs/decisions/04). Personas don't do this: they run in parallel batches with per-persona failure capture (§4), so one stall degrades to a Coverage-Gaps banner — but a lone integrator stall is catastrophic. Dispatch it so the stall is both *prevented* and *bounded*:
+The integrator is the heaviest subagent and the only load-bearing one: it runs alone, last, after every persona, and the run has no report without it. Dispatched naively it inherits the session default model and blocks this context until it returns — so when it stalls, the review goes silently quiet until a human notices and finishes integration by hand. That is what hung the 2026-06-09 meta run (7860s wall), the 2026-06-10 diff run on a second project (both right after the Fable-5 default switch, docs/decisions/04), and the 2026-07-19 --full run (29-min mid-turn wedge; the same job on Opus delivered in 155s — docs/decisions/11). Personas don't do this: they run in parallel batches with per-persona failure capture (§4), so one stall degrades to a Coverage-Gaps banner — but a lone integrator stall is catastrophic. Dispatch it so the stall is both *prevented* and *bounded*:
 
-**Model selection — the smartest model that doesn't run the meter.** The rule: give the integrator the strongest reasoning available *that won't incur a separate charge* (run the meter), with the 1M-token window large full/multiball bundles need (§1). As of 2026-06-10 that instantiates as the Fable-first ladder below — these rungs are the current instantiation, not the rule; re-point them if the smartest no-meter [1m] model changes (docs/decisions/04):
-1. **`claude-fable-5[1m]`** — when Fable is working AND won't incur a separate charge (i.e. on-subscription). Best window + synthesis; the default.
-2. **`claude-opus-4-8[1m]`** — otherwise (Fable unavailable, or it would incur a separate charge). Opus keeps the 1M window while getting off the volatile Fable tier whose availability blips caused the hangs. *Caveat (docs/decisions/03): if the dispatch surface can't honor the `[1m]` suffix on Opus and silently resolves it to a 200k tier, do NOT accept 200k for a large full/multiball bundle — go straight to inline integration (step C below), which runs in the orchestrator's own [1m] context.*
+**Model selection — size-dependent (ADR-11, supersedes the flat Fable-first ladder of docs/decisions/04 for big bundles).** The stall mode is Fable-specific and long-turn-specific, so the rung order depends on bundle size:
+- **Big bundle** — full-profile/`--all` runs, or ≥20 multiball passes: **`claude-opus-4-8[1m]` FIRST**, then inline integration. At the observed stall rate, Fable-first on big bundles just prepays a 10-30-min discovery cost before landing on Opus anyway. *Caveat (docs/decisions/03): if the dispatch surface resolves Opus to a 200k tier and the bundle won't fit, go straight to inline integration in the orchestrator's own [1m] context. Note that Stage 1 (above) shrinks the stage-2 input enough that 200k usually suffices.*
+- **Small bundle** — diff-mode runs, ≤8 passes: `claude-fable-5[1m]` first (best synthesis, cheap to retry at this size), then `claude-opus-4-8[1m]`, then inline.
+- Revisit trigger: if stall telemetry (§8a wall times + `STALLED` notes, measurable since the ADR-11 record-dispatch.sh timestamp fix) shows Fable clean for a month, restore Fable-first for big bundles.
 
-You don't pre-probe Fable health — the bounded wait below IS the health check: a stall on the chosen model trips the fallback.
+You don't pre-probe model health — the bounded wait below IS the health check: a stall on the chosen model trips the fallback.
 
 **Bounded dispatch:**
-- **A. Dispatch + bound.** Dispatch on the chosen model with `run_in_background: true` so it can't silently block this context; capture the task id and wait with a ≤10-minute cap — `TaskOutput(task_id, block: true, timeout: 600000)`, or a `Monitor`/`sleep 600` watch on the task. Record the model actually used in usage.jsonl (`integrator.model`, §8a).
+- **A. Dispatch + bound + watchdog (mechanical, not prose).** Dispatch on the chosen model with `run_in_background: true` so it can't silently block this context, then IMMEDIATELY arm a background watchdog in the same turn — do not rely on completion notifications (the 2026-07-19 stall ran 29 min past the "10-minute cap" precisely because the cap lived in prose while the orchestrator waited on a notification that never came):
+  ```bash
+  # fires when the report lands, or on wall-cap, or on liveness loss — whichever first
+  ( SECONDS=0
+    while [ ! -f "$RUN_DIR/report.md" ] && [ $SECONDS -lt 720 ]; do
+      sleep 15
+      # liveness tripwire: integrator touches $RUN_DIR/PROGRESS per phase (integrator.md);
+      # PROGRESS stale >5min while report absent = wedged mid-turn — flag early
+      if [ -f "$RUN_DIR/PROGRESS" ] && [ $(( $(date +%s) - $(stat -c %Y "$RUN_DIR/PROGRESS") )) -gt 300 ]; then
+        echo "WATCHDOG: PROGRESS stale >5min — integrator likely wedged"; exit 2; fi
+    done
+    [ -f "$RUN_DIR/report.md" ] && echo "INTEGRATOR DELIVERED after ${SECONDS}s" || echo "WATCHDOG: wall cap hit, report.md absent — intervene per step C" ) 
+  ```
+  (run with `run_in_background: true`; the completion notification is your wake-up). Record the model actually used in usage.jsonl (`integrator.model`, §8a); a killed/stalled attempt gets its own line with a `STALLED`/`KILLED` note so stall rates stay countable.
 - **B. Delivered in time** → read `$RUN_DIR/report.md` and render it verbatim as the output; read the snapshot from `$RUN_DIR/findings-snapshot.json` (§7.6). The integrator's return is a confirmation, not the report body — the report lives in the file (see the file-based contract below).
 - **Micro profile (`--micro`) integrates inline BY DEFAULT** — not as a fallback. A ≤4-persona N=2 output set fits comfortably in this context, and skipping the integrator dispatch saves a whole Fable call (ADR-09). Apply the same inline rules as step C below — every integrator output is still owed (report.md, findings-snapshot.json **including Phase 3.5's `verify_queue`**, registry-updates if pii/deanon ran), the §5.7 verification stage still runs, and the §8a usage line is `total_tokens: null, "note":"inline (micro profile)"`.
-- **C. Deadline exceeded or model unavailable** → before stopping, check once whether it has just delivered (prefer a delivered result over redoing the work). If truly stalled: advance the ladder once (Fable→Opus[1m]) and retry; if that also stalls, `TaskStop` it and **integrate inline in THIS context**. This is the one place (besides `--micro` above) the §5 "don't synthesize here" rule is deliberately suspended — a bounded inline integration beats an unbounded hang, and it's what a human falls back to anyway. Apply integrator.md's rules — Phase 0 sanitize → Phase 2 dedup → Phase 3 rank + verdict → **Phase 3.5 verify_queue** (§5.7 runs after inline integration too — omitting the queue silently disables verification on exactly the degraded runs that most need it), plus **Phase 1 only under multiball** and **Phase 4 only under `--loop`** — and emit every output the integrator owes: the markdown report, the `findings-snapshot` JSON block, and (only if `pii`/`deanon` ran) the `registry-updates` block. Note `integrator: <model> unavailable — integrated inline` in the report's Integration Notes (NOT in `failed_personas` — that's persona-only and would render a spurious Coverage-Gaps banner). If the orchestrator context is too tight to integrate cleanly (already past the §4 serialize threshold, ~70%), degrade to the minimal report (persona findings verbatim under `## Raw Persona Outputs`, integration-failure noted) rather than waiting longer — same fallback as unattended.md Step 4.
+- **C. Deadline exceeded or model unavailable** → before stopping, check once whether it has just delivered (prefer a delivered result over redoing the work). If truly stalled: `TaskStop` the wedged attempt, advance the ladder once (per the size-dependent order above) and retry — **resume-friendly (ADR-11): inject the dead attempt's salvage into the retry prompt as verified context** — any adjudications its transcript shows it confirmed against live code/data, its PROGRESS phase markers, and any partial `report.md`/`reconciled/` artifacts — so the retry doesn't re-read or re-probe the world (this cut the 2026-07-19 Opus retry to ~6 min total). If the retry also stalls, `TaskStop` it and **integrate inline in THIS context**. This is the one place (besides `--micro` above) the §5 "don't synthesize here" rule is deliberately suspended — a bounded inline integration beats an unbounded hang, and it's what a human falls back to anyway. Apply integrator.md's rules — Phase 0 sanitize → Phase 2 dedup → Phase 3 rank + verdict → **Phase 3.5 verify_queue** (§5.7 runs after inline integration too — omitting the queue silently disables verification on exactly the degraded runs that most need it), plus **Phase 1 only under multiball** and **Phase 4 only under `--loop`** — and emit every output the integrator owes: the markdown report, the `findings-snapshot` JSON block, and (only if `pii`/`deanon` ran) the `registry-updates` block. Note `integrator: <model> unavailable — integrated inline` in the report's Integration Notes (NOT in `failed_personas` — that's persona-only and would render a spurious Coverage-Gaps banner). If the orchestrator context is too tight to integrate cleanly (already past the §4 serialize threshold, ~70%), degrade to the minimal report (persona findings verbatim under `## Raw Persona Outputs`, integration-failure noted) rather than waiting longer — same fallback as unattended.md Step 4.
 
 **The integrator WRITES its outputs to files in `$RUN_DIR` and returns only a small confirmation — it must NOT return the full report inline.** Large report payloads recurrently fail on transport (ZlibError / dropped return), silently losing the whole synthesis after every persona already ran (root-caused 2026-06-27). So the contract is file-based. Pass `$RUN_DIR` to the integrator and instruct it to:
 - WRITE `$RUN_DIR/report.md` (the unified markdown report), `$RUN_DIR/findings-snapshot.json` (the snapshot JSON, no code fence), and — only if `pii`/`deanon` ran — `$RUN_DIR/registry-updates.json`.
+- If the Write tool is DENIED on a `$RUN_DIR` path, write the same file via Bash heredoc (`cat > "$RUN_DIR/report.md" <<'ANGEL_EOF' … ANGEL_EOF`) and continue. NEVER fall back to returning the report inline — that resurrects the exact transport failure this contract prevents. (Realized 2026-07-09: `$RUN_DIR` can sit outside the session's permission-scoped working dirs, and a subagent can't answer the resulting prompt, so Write dies silently while Bash succeeds. Bash stays the *fallback*, not the default: PreToolUse Bash hooks scan the whole command string, so report *content* can trip content-matching guards that Write's path-only checks never see.)
 - RETURN ONLY: the verdict line, the Top-5 titles, and the report path — under ~400 words.
 
 The orchestrator then READS `$RUN_DIR/report.md` and renders it verbatim as the output (do not modify, do not add commentary); the snapshot is read from `$RUN_DIR/findings-snapshot.json` in §7.6 (no fence-splitting). If `$RUN_DIR/report.md` is absent after the integrator returns (it died before writing), retry once on the same model, then integrate inline per step C — a missing file, not a parse error, is the failure signal now.
@@ -612,9 +633,11 @@ After the integrator delivers (or after you integrate inline per step C above), 
 
 If the integrator returns something malformed (e.g., missing Top 5, wrong section order, missing snapshot block), note the issue in a one-line correction above the report, but still render the report.
 
-## 5.6. Cross-model leg (`--cross` only)
+## 5.6. Cross-model leg (default-on interactive; `--no-cross` to suppress)
 
-Skip this section unless `--cross` was passed. This is the one axis the same-model battery can't reach: every persona and every multiball pass is Claude, so they share Claude's blind spots. A genuinely different model catches what Claude can't see about its own work. (Note: the second model already gets the *benefit* of Angel's persona perspectives via `--angel-report` — it reads and refutes/extends their findings — without re-running the whole battery on it.)
+Run this section on **every interactive run** — default-on (2026-07-18, the user: the `agy`/Gemini backend is `$0` and model-independence is the one axis the same-model battery, personas + multiball, structurally cannot cover, so it should be the default not an opt-in). `--no-cross` suppresses it. This supersedes the 2026-07-15 ADR-10 `--full`/`--all`-only auto-attach: that tune was the right direction (the 2026-06-23 pure-opt-in trial stalled for lack of paired data); defaulting it everywhere finishes the move and accrues the paired Angel+cross corpus on every run. The unattended (`claude -p`) path does NOT auto-attach — cross stays opt-in there (no interactive triage; the cron path shouldn't fan out a backend call unattended).
+
+This is the one axis the same-model battery can't reach: every persona and every multiball pass is Claude, so they share Claude's blind spots. A genuinely different model catches what Claude can't see about its own work. (Note: the second model already gets the *benefit* of Angel's persona perspectives via `--angel-report` — it reads and refutes/extends their findings — without re-running the whole battery on it. ALWAYS pass `--angel-report` here: without it the leg can neither refute Angel nor find "what Angel missed," and the run logs `had_angel_report:false` — a non-evaluable cold run. Step 1 below writes that report, so the pairing is automatic.)
 
 After the integrator delivers its report:
 

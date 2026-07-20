@@ -39,7 +39,12 @@ This is a defensive scan, not a rewrite — keep legitimate findings verbatim. T
 
 ## Phase 1: Within-persona reconciliation (multiball only)
 
-Skip this phase **only** if the input carries no `within_persona_runs` block at all (a single-pass run). If multiball input IS present, this phase — including persisting the per-pass record below — is **mandatory, not optional**: emitting the structured `within_persona_runs` field into the snapshot is a hard requirement, and a multiball run whose snapshot omits it (or records prose instead of structured per-pass arrays) now FAILS the completeness gate (`check-run-complete.py`, SKILL.md §8c). The 2026-06-19 N=5 run improvised prose `consensus` strings and skipped the field, leaving the run unmeasurable; do not repeat that — parse the passes and emit the field as specified below.
+**Hierarchical mode (the default under multiball since ADR-11).** When your inputs point at `reconciled_views` — per-persona files written by Stage-1 Reconcilers (`{run_dir}/reconciled/{persona}.md` + `{persona}-passes.json`) — Stage 1 has already done this phase's reconciliation. Your Phase 1 collapses to:
+1. Read every `reconciled/{persona}.md` and treat it as that persona's finding block for Phases 0/2/3 (the `(k/N passes)` tags are your `pass_support` source).
+2. Read every `reconciled/{persona}-passes.json`, validate it is structured JSON per-pass arrays (not prose), and assemble the fragments verbatim into the snapshot's `within_persona_runs` field. A malformed fragment → re-derive that persona's fragment yourself from its raw pass files if provided, else set that persona's entry to `null` and note it in Integration Notes (the completeness gate will flag it).
+3. Do NOT re-reconcile or second-guess Stage 1's promote/demote calls except via the Phase 2/3 rules that apply to all findings.
+
+**Legacy inline mode.** If instead the input carries raw per-pass blocks (`within_persona_runs` markdown), perform the full reconciliation below yourself. Skip this phase **only** if the input carries neither (a single-pass run). If multiball input IS present, this phase — including persisting the per-pass record below — is **mandatory, not optional**: emitting the structured `within_persona_runs` field into the snapshot is a hard requirement, and a multiball run whose snapshot omits it (or records prose instead of structured per-pass arrays) now FAILS the completeness gate (`check-run-complete.py`, SKILL.md §8c). The 2026-06-19 N=5 run improvised prose `consensus` strings and skipped the field, leaving the run unmeasurable; do not repeat that — parse the passes and emit the field as specified below.
 
 For each persona, you have N finding lists from N independent runs of that persona. Consolidate into a single list:
 
@@ -118,6 +123,8 @@ Add a `## Loop Status` section before `## Top 5` listing all `[persisted]` findi
 
 1. WRITE the full markdown report (the structure below) to `{run_dir}/report.md`.
 2. WRITE the machine-readable findings snapshot (the JSON described under "findings-snapshot block" below, *without* a code fence — raw JSON) to `{run_dir}/findings-snapshot.json`.
+
+**Write incrementally, and leave a liveness trail (ADR-11).** Monolithic 20-60k-token generations are the turn shape that stalls (2026-07-19 root-cause). So: build `report.md` in section-sized appends (header+Top5 first, then each severity section, then Resource Consumption/Integration Notes) rather than one giant Write; for a large snapshot, build it in chunks the same way (Bash appends are fine) and validate the assembled JSON at the end. After completing each phase (0, 1, 2, 3, 3.5, report-written, snapshot-written), append one line — `phase-N done <ISO-timestamp>` — to `{run_dir}/PROGRESS`. The orchestrator's watchdog reads PROGRESS mtime as your heartbeat; a silent integrator is indistinguishable from a wedged one without it.
 3. If `pii` or `deanon` ran, WRITE the registry-updates JSON (raw, no fence) to `{run_dir}/registry-updates.json` — see "## Registry updates".
 4. RETURN to the orchestrator ONLY: the verdict line, the Top-5 finding titles (one line each, severity + which personas caught it), and the report path. Keep the return under ~400 words so it never fails on transport.
 
