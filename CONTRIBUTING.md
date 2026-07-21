@@ -6,17 +6,24 @@ Thanks for considering a contribution. NineAngel is a personal tool used in prod
 
 A new persona must:
 
-1. **Live at `personas/<short>.md`** and start with YAML frontmatter:
+1. **Live at `personas/<filename>.md`** (the filename need not match the short name — see the "Persona file" column in SKILL.md §1 for the existing short→filename mapping convention; choose a descriptive filename and register it in both mapping tables) and start with YAML frontmatter:
 
    ```yaml
    ---
    name: <short>
-   default: yes              # or opt-in
-   modes: [diff, full]       # diff | full | both
+   default: opt-in           # yes | opt-in; use opt-in on entry (experimental:true blocks auto-include anyway)
+   modes: [diff, full]       # diff | full | [diff, full]
    experimental: true        # true on entry; drops once calibrated
    requires:
      any_of: [signal1, signal2]   # or [any] to match every project
-   prefers: []
+   context:
+     digest: yes             # yes | no
+     project_claude_md: yes  # yes | no
+     full_bundle: no         # yes | no (yes only for blindspot-style whole-repo reads)
+     lane: |
+       Describe the slice of the project the persona should read: entry points,
+       modules touching its concern, relevant config. Keep it concise — one short
+       paragraph. Orchestrator substitutes this into the dispatch prompt.
    ---
    ```
 
@@ -27,6 +34,16 @@ A new persona must:
 4. **Add a row** to the SKILL.md (§1) and unattended.md (Step 3) mapping tables — short name, persona file, model assignment.
 
 5. **Update DESIGN.md** §Personas with a one-paragraph description and the persona's required signals.
+
+6. **Before submitting**, run both gates and confirm they exit 0:
+   ```bash
+   python3 scripts/validate-personas.py
+   bash scripts/test_scripts.sh
+   ```
+   Or install the pre-commit hook so both run automatically on every commit:
+   ```bash
+   ln -s ../../scripts/pre-commit.sh .git/hooks/pre-commit
+   ```
 
 A new persona earns its slot when it surfaces ≥1 Important+ finding across multiple live runs that an existing persona missed. If 2 of 3 calibration runs return zero unique-and-grounded findings, recalibrate or remove the persona.
 
@@ -48,6 +65,18 @@ PRs that fix bugs, sharpen prompts, or improve a persona's calibration should:
 - Avoid touching unrelated personas in the same PR (one persona per PR keeps the diff focused).
 - Update `DESIGN.md` if the change affects architecture, selection logic, or persona-lane boundaries.
 - Add a CHANGELOG entry under `[Unreleased]` for user-visible changes (new flags, persona additions/removals, default-battery changes, breaking changes to the fix-batch format or selection logic).
+
+## Publishing / mirroring to PropterMalone
+
+Before staging or publishing to the public mirror, both guards must be green:
+
+```bash
+bash scripts/pre-commit.sh
+```
+
+This runs `validate-personas.py` (registry consistency, frontmatter contract, signal parity) and `test_scripts.sh` (script behavior). A red suite or validator error must be fixed before the publish step — both were green at the last published HEAD.
+
+If either guard fails, do not publish. Fix the failure, re-run, and only proceed when both exit 0. This is how the 07-20 red-suite publish happened: no pre-publish gate ran.
 
 ## Code of Conduct
 

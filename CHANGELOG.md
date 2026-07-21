@@ -4,6 +4,18 @@ All notable changes to NineAngel are documented here. Versioning follows [Semant
 
 ## [Unreleased]
 
+### Added (2026-07-21 — fix batch)
+- **`editor` persona** (`default: yes`, `requires: prose_artifacts`) — prose quality gate: wasted words, passive voice, buried leads, over-hedging. Auto-fires on prose-dominant diffs/projects alongside `rigor`. Does not fire on code-dominant changes (artifact-class gating).
+- **`rigor` persona** (`default: yes`, `requires: prose_artifacts`) — analytical rigour gate: unsupported claims, vague hedges, missing falsifiers. Pairs with `editor`; fires on the same `prose_artifacts` signal.
+- **`heir` persona** (`default: opt-in`, `experimental: true`) — cold-start handoff audit: can a never-met operator + AI agent use, understand, troubleshoot, and modify this project? On `--full`/`--all` runs the orchestrator recommends it and includes on assent; unattended full runs include it only if explicitly named.
+- **`prose_artifacts` signal** added to the signal vocabulary (SKILL.md §1.5 and unattended.md §2.5). Gates Editor + Rigor; also gates out the code-tuned bug-catchers on prose-dominant changes.
+- **Signal-parity guard in `validate-personas.py`** — diffs the signal vocabulary of SKILL.md §1.5 and unattended.md §2.5; exits nonzero if they diverge.
+- **Value-enum enforcement in `validate-personas.py`** — `default ∈ {yes, opt-in}`, `experimental ∈ {true, false}`, `modes ⊆ {diff, full}`; previously only presence, not value, was checked.
+
+### Changed (2026-07-18 — ADR-10/11)
+- **Cross-model leg default-ON for all interactive runs (ADR-10, superseded by 2026-07-18 the user)** — `--cross` (agy/Gemini, $0) attaches to every interactive run by default; `--no-cross` suppresses. Previously only on `--full`/`--all`. `--cross` is now a no-op affirmation; unattended stays opt-in.
+- **Hierarchical multiball reconciler (ADR-11)** — `record-dispatch.sh` now stamps real timestamps (`ended_at` = call time, `started_at = ended_at − duration_ms/1000`; null-duration → `started_at: null`), enabling integrator stall-rate measurement. Previously both were hard nulls.
+
 ### Changed (2026-07-08 — post-eval batch, ADR-07)
 - **Model retier per eval leg 3**: Future-Me and Test promoted to the top tier (`claude-fable-5[1m]`); Hypercritical deliberately stays Sonnet; a Fable-lapse ladder documented in SKILL.md §1 (top lanes → `claude-opus-4-8[1m]`, except Test → Sonnet; keep N=2 on Opus lanes). Sonnet personas pinned to explicit `claude-sonnet-5[1m]` (tier aliases resolve differently per dispatch surface). Tier-by-lane principle reframed as **contract-tracing depth**.
 - **Battery rebalance per eval legs 1–3**: Freshness demoted to opt-in (4% acceptance, 0 ground-truth catches, 1 anti-catch); Test/Performance/User gates tightened (dropped near-universal signals `package_json`/`runtime_code`/`readme`); data-derived minimal-core guidance added (adv + hyper + data-int).

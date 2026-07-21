@@ -27,6 +27,46 @@ from pathlib import Path
 
 TIER_RE = re.compile(r"\b(haiku|sonnet|opus|fable)\b", re.I)
 SHORT_RE = re.compile(r"[a-z][a-z-]{1,15}")
+SIGNAL_RE = re.compile(r"`([a-z][a-z_]*)`")
+
+
+def parse_signals(md_text, section_marker):
+    """Extract signal names from a | `signal` | ... | table under the given section heading.
+
+    The section heading is identified by the `section_marker` substring (matched
+    against the whole line).  Sub-headings (### …) within the section are ignored;
+    only a heading of equal or higher level (## or #) closes the section.
+
+    Returns a set of signal name strings.
+    """
+    signals = set()
+    in_section = False
+    section_level = 0
+    for line in md_text.splitlines():
+        stripped = line.strip()
+        # Detect headings: count leading #s
+        heading_match = re.match(r"^(#{1,6})\s", stripped)
+        if heading_match:
+            level = len(heading_match.group(1))
+            if section_marker in stripped:
+                in_section = True
+                section_level = level
+                continue
+            if in_section and level <= section_level:
+                # Same or higher level heading closes the section
+                in_section = False
+            continue  # sub-headings within section: keep scanning
+        if not in_section:
+            continue
+        if stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if all(set(c) <= set("-: ") for c in cells):
+                continue  # separator row
+            if cells:
+                m = SIGNAL_RE.match(cells[0])
+                if m:
+                    signals.add(m.group(1))
+    return signals
 
 
 def parse_rows(md_text, source):
@@ -69,6 +109,40 @@ def parse_rows(md_text, source):
 REQUIRED_TOP = ("name", "default", "modes", "experimental", "requires", "context")
 REQUIRED_NESTED = ("any_of", "digest", "project_claude_md", "full_bundle", "lane")
 FORBIDDEN_KEYS = ("prefers",)
+DEFAULT_ENUM = {"yes", "opt-in"}
+EXPERIMENTAL_ENUM = {"true", "false"}
+MODES_ENUM = {"diff", "full"}
+
+
+def _top_value(fm_lines, key):
+    """Return the raw value string for an unindented top-level key, or None.
+
+    Strips inline YAML comments (# ...) so values like 'opt-in  # demoted'
+    compare cleanly against the enum.
+    """
+    for ln in fm_lines:
+        if ln and not ln[0].isspace() and ln.startswith(key + ":"):
+            val = ln[len(key) + 1:].strip()
+            # Strip inline comment: find first # preceded by whitespace
+            comment_pos = -1
+            for i, ch in enumerate(val):
+                if ch == "#" and (i == 0 or val[i - 1].isspace()):
+                    comment_pos = i
+                    break
+            if comment_pos >= 0:
+                val = val[:comment_pos].strip()
+            return val
+    return None
+
+
+def _modes_values(fm_lines):
+    """Parse the modes: [x, y] list into a set of strings (best-effort)."""
+    val = _top_value(fm_lines, "modes")
+    if val is None:
+        return set()
+    # Strip brackets and split by comma
+    val = val.strip("[]").strip()
+    return {v.strip() for v in val.split(",") if v.strip()}
 
 
 def check_frontmatter(path):
@@ -101,6 +175,17 @@ def check_frontmatter(path):
         if k in top or k in nested:
             problems.append(f"{rel}: frontmatter carries dead key '{k}:' — remove it (nothing reads it; "
                             f"the pii/deanon pairing is prose-enforced in SKILL.md §1/§4)")
+    # Value-enum checks
+    default_val = _top_value(fm, "default")
+    if default_val is not None and default_val not in DEFAULT_ENUM:
+        problems.append(f"{rel}: frontmatter default '{default_val}' not in allowed enum {sorted(DEFAULT_ENUM)}")
+    experimental_val = _top_value(fm, "experimental")
+    if experimental_val is not None and experimental_val not in EXPERIMENTAL_ENUM:
+        problems.append(f"{rel}: frontmatter experimental '{experimental_val}' not in allowed enum {sorted(EXPERIMENTAL_ENUM)}")
+    modes_vals = _modes_values(fm)
+    bad_modes = modes_vals - MODES_ENUM
+    if bad_modes:
+        problems.append(f"{rel}: frontmatter modes contains invalid value(s) {sorted(bad_modes)} — allowed: {sorted(MODES_ENUM)}")
     return problems
 
 
@@ -110,15 +195,26 @@ def main():
     args = ap.parse_args()
     sd = Path(args.skill_dir)
 
-    skill_rows, skill_problems = parse_rows((sd / "SKILL.md").read_text(), "SKILL.md")
-    unatt_rows, unatt_problems = parse_rows((sd / "unattended.md").read_text(), "unattended.md")
+    skill_text = (sd / "SKILL.md").read_text()
+    unatt_text = (sd / "unattended.md").read_text()
+    skill_rows, skill_problems = parse_rows(skill_text, "SKILL.md")
+    unatt_rows, unatt_problems = parse_rows(unatt_text, "unattended.md")
     files = {p.name for p in (sd / "personas").glob("*.md")}
 
     skill = {s: tier for s, _full, tier in skill_rows}
     unatt = {s: tier for s, _file, tier in unatt_rows}
     unatt_file = {s: f for s, f, _t in unatt_rows}
 
-    problems = skill_problems + unatt_problems
+    # Signal-parity check: SKILL.md §1.5 and unattended.md §2.5 must have the same vocabulary.
+    skill_signals = parse_signals(skill_text, "1.5.")
+    unatt_signals = parse_signals(unatt_text, "2.5:")
+    signal_problems = []
+    for sig in sorted(skill_signals - unatt_signals):
+        signal_problems.append(f"signal parity: '{sig}' present in SKILL.md §1.5 but absent from unattended.md §2.5")
+    for sig in sorted(unatt_signals - skill_signals):
+        signal_problems.append(f"signal parity: '{sig}' present in unattended.md §2.5 but absent from SKILL.md §1.5")
+
+    problems = skill_problems + unatt_problems + signal_problems
 
     for p in sorted((sd / "personas").glob("*.md")):
         problems.extend(check_frontmatter(p))

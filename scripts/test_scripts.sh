@@ -105,6 +105,64 @@ sed -i '/^  full_bundle:/d' "$VP/personas/adversarial.md"
 rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$VP" 2>&1)" || rc=$?
 rc_is $rc 1 "missing context key exits nonzero"
 has "full_bundle" "$vout" "missing context key named in output"
+# Value-enum fixtures (F2): default ∈ {yes,opt-in}, experimental ∈ {true,false}, modes ⊆ {diff,full}
+vp_fixture "$VP" '| adv | Adversarial | Sonnet 4.6 |' '| adv | `adversarial.md` | `claude-sonnet-4-6` |'
+mk_persona "$VP/personas/adversarial.md"
+sed -i 's/^default: yes/default: no/' "$VP/personas/adversarial.md"
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$VP" 2>&1)" || rc=$?
+rc_is $rc 1 "invalid default value (no) exits nonzero"
+has "default" "$vout" "invalid default value named in output"
+vp_fixture "$VP" '| adv | Adversarial | Sonnet 4.6 |' '| adv | `adversarial.md` | `claude-sonnet-4-6` |'
+mk_persona "$VP/personas/adversarial.md"
+sed -i 's/^experimental: false/experimental: maybe/' "$VP/personas/adversarial.md"
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$VP" 2>&1)" || rc=$?
+rc_is $rc 1 "invalid experimental value (maybe) exits nonzero"
+has "experimental" "$vout" "invalid experimental value named in output"
+vp_fixture "$VP" '| adv | Adversarial | Sonnet 4.6 |' '| adv | `adversarial.md` | `claude-sonnet-4-6` |'
+mk_persona "$VP/personas/adversarial.md"
+sed -i 's/^modes: \[diff, full\]/modes: [diff, full, bogus]/' "$VP/personas/adversarial.md"
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$VP" 2>&1)" || rc=$?
+rc_is $rc 1 "invalid modes value (bogus) exits nonzero"
+has "modes" "$vout" "invalid modes value named in output"
+# Signal-parity fixture (F4): validate-personas detects signals in SKILL.md §1.5 missing from unattended.md
+# Build SKILL.md with the model table (so model-parity checks pass) + a §1.5 signal table with prose_artifacts.
+# Build unattended.md with the model table + a Step 2.5 signal table that OMITS prose_artifacts.
+vp4="$TMP/vp4"; rm -rf "$vp4"; mkdir -p "$vp4/personas"
+mk_persona "$vp4/personas/adversarial.md"
+cat > "$vp4/SKILL.md" <<'MD'
+# fixture
+
+## 1. Parse arguments
+
+| Short | Full | Model |
+|-------|------|-------|
+| adv | Adversarial | Sonnet 4.6 |
+
+## 1.5. Battery selection
+
+| Signal | Concept (with example hints — non-exhaustive) |
+|--------|-----------------------------------------------|
+| `any` | Always present. |
+| `prose_artifacts` | Predominantly prose change or project. |
+MD
+cat > "$vp4/unattended.md" <<'MD'
+# fixture
+
+## Step 3: Dispatch personas
+
+| Short | Persona file | Model |
+|-------|-------------|-------|
+| adv | `adversarial.md` | `claude-sonnet-4-6` |
+
+## Step 2.5: Battery selection
+
+| Signal | Concept (with example hints — non-exhaustive) |
+|--------|-----------------------------------------------|
+| `any` | Always present. |
+MD
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp4" 2>&1)" || rc=$?
+rc_is $rc 1 "signal parity: prose_artifacts in SKILL but not unattended exits nonzero"
+has "prose_artifacts" "$vout" "signal parity: missing signal named in output"
 
 echo "== append-usage-log.sh =="
 RD="$ANGEL_RUNS_ROOT/r_full"; mk_usage "$RD" 110000
@@ -169,6 +227,83 @@ print("json-asserts-ok")
 PY
 rc_is $rc 0 "mine-runs --json: disposed/fp/cited/overlap correct"
 
+# f15: --skill-dir canonicalization: a file-stem key (e.g. "adversarial") alongside
+# the canonical short-name key (e.g. "adv") must merge into one row when the
+# fixture personas dir maps stem -> canon (adversarial.md frontmatter name: adv).
+MR_SKILL="$TMP/mr_skill"; mkdir -p "$MR_SKILL/personas"
+# Write a persona where FILE STEM ("adversarial") differs from frontmatter name ("adv").
+# build_persona_aliases maps both -> "adv"; so snapshots logging either key merge.
+cat > "$MR_SKILL/personas/adversarial.md" <<'PERSONA'
+---
+name: adv
+default: yes
+modes: [diff, full]
+experimental: false
+requires:
+  any_of: [any]
+context:
+  digest: yes
+  project_claude_md: yes
+  full_bundle: no
+  lane: |
+    fixture lane
+---
+fixture body
+PERSONA
+MR_RUNS="$TMP/mr_runs"; mkdir -p "$MR_RUNS"
+# run-A: snapshot uses the long file-stem key "adversarial"
+MR_A="$MR_RUNS/20260601T120000Z-mrA"; mkdir -p "$MR_A/findings"; echo "stub" > "$MR_A/findings/adversarial.md"
+cat > "$MR_A/findings-snapshot.json" <<'JSON'
+{"version":1,"project":"mrtest","date":"2026-06-01","mode":"full","verdict":"OK",
+ "personas_run":["adversarial"],
+ "findings":[{"id":"fa1","severity":"important","title":"Stem key finding","personas":["adversarial"],"evidence":"code-site"}]}
+JSON
+# run-B: snapshot uses the canonical short name "adv"
+MR_B="$MR_RUNS/20260601T130000Z-mrB"; mkdir -p "$MR_B/findings"; echo "stub" > "$MR_B/findings/adv.md"
+cat > "$MR_B/findings-snapshot.json" <<'JSON'
+{"version":1,"project":"mrtest","date":"2026-06-01","mode":"full","verdict":"OK",
+ "personas_run":["adv"],
+ "findings":[{"id":"fb1","severity":"important","title":"Short name finding","personas":["adv"],"evidence":"code-site"}]}
+JSON
+mralias="$("$DIR/mine-runs.py" --runs-dir "$MR_RUNS" --since 2026-06-01 --skill-dir "$MR_SKILL" --json)"
+rc=0; python3 - "$mralias" <<'PY' || rc=$?
+import json, sys
+d = json.loads(sys.argv[1])
+# adversarial.md has name: adv -> both "adversarial" and "adv" canonicalize to "adv".
+assert len(d["personas"]) == 1, f"expected 1 canonical persona row, got {list(d['personas'].keys())}"
+key = list(d["personas"].keys())[0]
+assert key == "adv", f"expected canonical key 'adv', got '{key}'"
+assert d["personas"][key]["findings"] == 2, f"expected 2 merged findings, got {d['personas'][key]}"
+print("alias-canon-ok")
+PY
+rc_is $rc 0 "mine-runs --skill-dir: file-stem key merges with canonical short name into one row"
+
+# f17: REFUTED verdicts must count as false positives in per-persona precision.
+# Run with a snapshot that has a REFUTED verification on adv's finding.
+MR_REF="$ANGEL_RUNS_ROOT/20260602T120000Z-refuted"; mkdir -p "$MR_REF/findings"; echo "stub" > "$MR_REF/findings/adv.md"
+cat > "$MR_REF/findings-snapshot.json" <<'JSON'
+{"version":2,"project":"reftest","date":"2026-06-02","mode":"full","verdict":"CHANGES REQUIRED",
+ "personas_run":["adv"],
+ "findings":[
+  {"id":"rf1","severity":"important","title":"Refuted finding","personas":["adv"],
+   "verification":{"verdict":"REFUTED","method":"ran","evidence":"not reproducible"}},
+  {"id":"rf2","severity":"important","title":"Confirmed finding","personas":["adv"],
+   "verification":{"verdict":"CONFIRMED","method":"traced","evidence":"traced to sink"}}
+ ]}
+JSON
+mrref_json="$("$DIR/mine-runs.py" --runs-dir "$ANGEL_RUNS_ROOT" --since 2026-06-02 --json)"
+rc=0; python3 - "$mrref_json" <<'PY' || rc=$?
+import json, sys
+d = json.loads(sys.argv[1])
+adv = d["personas"]["adv"]
+# rf1 is REFUTED -> counts as machine FP; rf2 is CONFIRMED -> not FP.
+assert adv["false_positives"] == 1, f"expected 1 REFUTED FP, got {adv}"
+assert adv["machine_false_positives"] == 1, f"machine_false_positives must track REFUTED count: {adv}"
+assert adv["human_false_positives"] == 0, f"human_false_positives must be 0 (no rejected-wrong): {adv}"
+print("refuted-fp-ok")
+PY
+rc_is $rc 0 "mine-runs: REFUTED verdict counts as false positive in precision metric"
+
 echo "== check-run-complete.py =="
 "$DIR/append-usage-log.sh" "$RD" >/dev/null   # ensures a run: line in $ANGEL_USAGE_LOG
 rc=0; "$DIR/check-run-complete.py" "$RD" >/dev/null 2>&1 || rc=$?; rc_is $rc 0 "complete run passes"
@@ -225,21 +360,75 @@ cat > "$RMB/findings-snapshot.json" <<'JSON'
 JSON
 rc=0; "$DIR/check-run-complete.py" "$RMB" >/dev/null 2>&1 || rc=$?; rc_is $rc 0 "multiball:true (bool) with valid record passes; bool not miscounted as N"
 
+# MULTIBALL marker file detection
+RMB2="$ANGEL_RUNS_ROOT/r_mball2"; mk_usage "$RMB2" 90000; echo "stub" > "$RMB2/findings/adv.md"
+printf '2\n' > "$RMB2/MULTIBALL"
+"$DIR/append-usage-log.sh" "$RMB2" >/dev/null
+cat > "$RMB2/findings-snapshot.json" <<'JSON'
+{"version":2,"project":"demo","mode":"diff","personas_run":["adv"],
+ "findings":[],"within_persona_runs":null}
+JSON
+rc=0; "$DIR/check-run-complete.py" "$RMB2" >/dev/null 2>&1 || rc=$?; rc_is $rc 1 "MULTIBALL marker triggers within_persona_runs check"
+# with valid within_persona_runs it passes
+cat > "$RMB2/findings-snapshot.json" <<'JSON'
+{"version":2,"project":"demo","mode":"diff","personas_run":["adv"],
+ "findings":[],"within_persona_runs":{"adv":[[],[]]}}
+JSON
+rc=0; "$DIR/check-run-complete.py" "$RMB2" >/dev/null 2>&1 || rc=$?; rc_is $rc 0 "MULTIBALL marker + valid within_persona_runs passes"
+# passes/ dir detection
+RMB3="$ANGEL_RUNS_ROOT/r_mball3"; mk_usage "$RMB3" 90000; echo "stub" > "$RMB3/findings/adv.md"
+mkdir -p "$RMB3/passes"; touch "$RMB3/passes/adv-p1.md" "$RMB3/passes/adv-p2.md"
+"$DIR/append-usage-log.sh" "$RMB3" >/dev/null
+cat > "$RMB3/findings-snapshot.json" <<'JSON'
+{"version":2,"project":"demo","mode":"diff","personas_run":["adv"],
+ "findings":[],"within_persona_runs":null}
+JSON
+rc=0; "$DIR/check-run-complete.py" "$RMB3" >/dev/null 2>&1 || rc=$?; rc_is $rc 1 "passes/ dir triggers within_persona_runs check"
+cat > "$RMB3/findings-snapshot.json" <<'JSON'
+{"version":2,"project":"demo","mode":"diff","personas_run":["adv"],
+ "findings":[],"within_persona_runs":{"adv":[[],[]]}}
+JSON
+rc=0; "$DIR/check-run-complete.py" "$RMB3" >/dev/null 2>&1 || rc=$?; rc_is $rc 0 "passes/ dir + valid within_persona_runs passes"
+
 echo "== record-dispatch =="
 RRD="$ANGEL_RUNS_ROOT/r_rd"; mkdir -p "$RRD"
 rdl="$(printf '## Findings\n- one\n' | "$DIR/record-dispatch.sh" --findings "$RRD" persona rtfm claude-sonnet-4-6 50000 10 60000)"
 rc=0; python3 - "$RRD" "$rdl" <<'PY' || rc=$?
-import json, sys
+import json, re, sys
+from datetime import datetime, timezone
 rd, line = sys.argv[1], sys.argv[2]
 j = json.loads(line)
-assert j == {"phase": "persona", "name": "rtfm", "model": "claude-sonnet-4-6",
-             "total_tokens": 50000, "tool_uses": 10, "duration_ms": 60000,
-             "started_at": None, "ended_at": None, "reader_pack": False}, j
+# ADR-11: timestamps are real ISO-8601 strings, not null
+assert j["phase"] == "persona", j
+assert j["name"] == "rtfm", j
+assert j["model"] == "claude-sonnet-4-6", j
+assert j["total_tokens"] == 50000, j
+assert j["tool_uses"] == 10, j
+assert j["duration_ms"] == 60000, j
+assert j["reader_pack"] == False, j
+ISO_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+assert ISO_RE.match(j["ended_at"]), f"ended_at not ISO-8601: {j['ended_at']}"
+assert ISO_RE.match(j["started_at"]), f"started_at not ISO-8601: {j['started_at']}"
+# started_at == ended_at - 60s (duration_ms=60000)
+ea = datetime.strptime(j["ended_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+sa = datetime.strptime(j["started_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+assert (ea - sa).total_seconds() == 60, f"expected 60s gap, got {(ea-sa).total_seconds()}"
 last = open(rd + "/usage.jsonl").read().strip().splitlines()[-1]
 assert json.loads(last) == j, last
 print("rd-asserts-ok")
 PY
 rc_is $rc 0 "record-dispatch appends a schema-correct JSONL line"
+# null-duration dispatch: started_at must be null, ended_at must be ISO-8601
+rdnull="$("$DIR/record-dispatch.sh" "$RRD" persona rtfm claude-sonnet-4-6 null null null </dev/null)"
+rc=0; python3 - "$rdnull" <<'PY' || rc=$?
+import json, re, sys
+j = json.loads(sys.argv[1])
+assert j["started_at"] is None, f"null-duration: started_at should be null, got {j['started_at']}"
+ISO_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+assert ISO_RE.match(j["ended_at"]), f"null-duration: ended_at not ISO-8601: {j['ended_at']}"
+print("null-duration-ok")
+PY
+rc_is $rc 0 "null-duration dispatch: started_at null, ended_at stamped"
 grep -q '^- one$' "$RRD/findings/rtfm.md" && ok "findings file written from stdin (--findings)" || bad "findings file written from stdin (--findings)"
 rdn="$("$DIR/record-dispatch.sh" "$RRD" persona adv claude-sonnet-4-6 null null null unmeasured </dev/null)"
 has '"total_tokens":null' "$rdn" "null tokens stay null in the JSONL line"
@@ -282,6 +471,42 @@ case "$mline" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z" roster swap trial") ok "marker line is ISO date + reason";;
   *) bad "marker line is ISO date + reason" "got: $mline";;
 esac
+# f20: PROJECT_DIR with shell metacharacters must be rejected before eval-embedding.
+rc=0; HOME="$TMP/home" "$DIR/init-run.sh" '/tmp/project;evil_cmd' 2>/dev/null || rc=$?
+rc_is $rc 1 "init-run: semicolon in PROJECT_DIR is rejected"
+rc=0; HOME="$TMP/home" "$DIR/init-run.sh" '/tmp/project$(cmd)' 2>/dev/null || rc=$?
+rc_is $rc 1 "init-run: dollar-paren in PROJECT_DIR is rejected"
+rc=0; HOME="$TMP/home" "$DIR/init-run.sh" '/tmp/project`cmd`' 2>/dev/null || rc=$?
+rc_is $rc 1 "init-run: backtick in PROJECT_DIR is rejected"
+# A clean path (letters, digits, dots, underscores, hyphens, slashes, spaces) must pass.
+rc=0; HOME="$TMP/home" "$DIR/init-run.sh" '/tmp/My Project 1.0/src' 2>/dev/null || rc=$?
+rc_is $rc 0 "init-run: path with letters/digits/dots/spaces passes charset check"
+
+# f34: init-run.sh must record PROJECT_COMMIT (short git HEAD or "null") in the run dir.
+PROJ_GIT="$TMP/proj_git"; mkdir -p "$PROJ_GIT"
+git -C "$PROJ_GIT" init -q
+git -C "$PROJ_GIT" config user.email "test@test.com"
+git -C "$PROJ_GIT" config user.name "Test"
+echo "hello" > "$PROJ_GIT/hello.txt"
+git -C "$PROJ_GIT" add hello.txt
+git -C "$PROJ_GIT" commit -qm "init"
+PROJ_HEAD="$(git -C "$PROJ_GIT" rev-parse --short HEAD)"
+F34_RUN_DIR=""
+rc=0; eval "$(HOME="$TMP/home" "$DIR/init-run.sh" "$PROJ_GIT")" || rc=$?
+F34_RUN_DIR="$RUN_DIR"
+rc_is $rc 0 "init-run exits 0 on git project"
+[ -f "$F34_RUN_DIR/PROJECT_COMMIT" ] && ok "init-run: PROJECT_COMMIT file written" || bad "init-run: PROJECT_COMMIT file written" "no file at $F34_RUN_DIR/PROJECT_COMMIT"
+pcommit="$(cat "$F34_RUN_DIR/PROJECT_COMMIT" 2>/dev/null || echo MISSING)"
+[ "$pcommit" = "$PROJ_HEAD" ] && ok "init-run: PROJECT_COMMIT matches git HEAD" || bad "init-run: PROJECT_COMMIT matches git HEAD" "got '$pcommit', expected '$PROJ_HEAD'"
+# Non-git project -> PROJECT_COMMIT file contains "null"
+PROJ_NOGIT="$TMP/proj_nogit"; mkdir -p "$PROJ_NOGIT"
+F34_RUN_DIR2=""
+rc=0; eval "$(HOME="$TMP/home" "$DIR/init-run.sh" "$PROJ_NOGIT")" || rc=$?
+F34_RUN_DIR2="$RUN_DIR"
+rc_is $rc 0 "init-run exits 0 on non-git project"
+[ -f "$F34_RUN_DIR2/PROJECT_COMMIT" ] && ok "init-run: PROJECT_COMMIT file written for non-git project" || bad "init-run: PROJECT_COMMIT file written for non-git project"
+pcommit2="$(cat "$F34_RUN_DIR2/PROJECT_COMMIT" 2>/dev/null || echo MISSING)"
+[ "$pcommit2" = "null" ] && ok "init-run: non-git project writes 'null'" || bad "init-run: non-git project writes 'null'" "got '$pcommit2'"
 
 echo "== aggregate-usage.py =="
 RAG="$ANGEL_RUNS_ROOT/20260601T120000Z-fixture1"
@@ -310,6 +535,30 @@ print("aggregate-asserts-ok")
 PY
 rc_is $rc 0 "aggregate-usage: totals/unmeasured/integrator/verdict/findings correct"
 grep -q "persona:adv" "$RAG/UNMEASURED.md" && ok "UNMEASURED.md written with unmeasured entry" || bad "UNMEASURED.md written with unmeasured entry"
+# f34: project_commit from PROJECT_COMMIT file must appear in usage.json.
+RAG_PC="$ANGEL_RUNS_ROOT/20260601T121500Z-pc1"; mkdir -p "$RAG_PC/findings"; echo "stub" > "$RAG_PC/findings/rtfm.md"
+cp "$RAG/usage.jsonl" "$RAG_PC/usage.jsonl"; cp "$RAG/findings-snapshot.json" "$RAG_PC/findings-snapshot.json"
+printf 'abc1234\n' > "$RAG_PC/PROJECT_COMMIT"
+rc=0; python3 "$DIR/aggregate-usage.py" "$RAG_PC" >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "aggregate-usage exits 0 with PROJECT_COMMIT file"
+rc=0; python3 - "$RAG_PC" <<'PY' || rc=$?
+import json, sys
+u = json.load(open(sys.argv[1] + "/usage.json"))
+assert u.get("project_commit") == "abc1234", f"expected 'abc1234', got {u.get('project_commit')}"
+print("project-commit-ok")
+PY
+rc_is $rc 0 "aggregate-usage: project_commit from PROJECT_COMMIT file appears in usage.json"
+# Without PROJECT_COMMIT file, project_commit must be null.
+RAG_NPC="$ANGEL_RUNS_ROOT/20260601T122000Z-npc1"; mkdir -p "$RAG_NPC/findings"; echo "stub" > "$RAG_NPC/findings/rtfm.md"
+cp "$RAG/usage.jsonl" "$RAG_NPC/usage.jsonl"; cp "$RAG/findings-snapshot.json" "$RAG_NPC/findings-snapshot.json"
+rc=0; python3 "$DIR/aggregate-usage.py" "$RAG_NPC" >/dev/null 2>&1 || rc=$?
+rc=0; python3 - "$RAG_NPC" <<'PY' || rc=$?
+import json, sys
+u = json.load(open(sys.argv[1] + "/usage.json"))
+assert u.get("project_commit") is None, f"expected null without PROJECT_COMMIT file, got {u.get('project_commit')}"
+print("no-project-commit-ok")
+PY
+rc_is $rc 0 "aggregate-usage: project_commit is null without PROJECT_COMMIT file"
 
 echo "== finalize-run.sh =="
 rc=0; "$DIR/finalize-run.sh" "$RAG" >/dev/null 2>&1 || rc=$?; rc_is $rc 0 "finalize-run exits 0 on complete fixture"
@@ -351,6 +600,20 @@ has "already exists" "$sout2" "re-emit reports the no-op"
 cmp -s "$TMP/disp.before" "$SK/dispositions.json" && ok "existing dispositions.json untouched (idempotent)" || bad "existing dispositions.json untouched (idempotent)"
 rc=0; ANGEL_RUNS_ROOT="$SKROOT" "$DIR/emit-dispositions-skeleton.py" /etc >/dev/null 2>&1 || rc=$?
 rc_is $rc 1 "write outside runs-root rejected"
+# f26: path-traversal-shaped finding IDs must be skipped with a warning.
+SK26="$SKROOT/r_skel_badid"; mkdir -p "$SK26/findings"
+cat > "$SK26/findings-snapshot.json" <<'JSON'
+{"version":1,"project":"test","mode":"full","verdict":"OK","findings":[
+  {"id":"valid-id","severity":"important","title":"Good finding"},
+  {"id":"../evil/path","severity":"important","title":"Traversal finding"},
+  {"id":"f2; rm -rf /","severity":"minor","title":"Injection finding"}
+]}
+JSON
+rc=0; sk26out="$(ANGEL_RUNS_ROOT="$SKROOT" "$DIR/emit-dispositions-skeleton.py" "$SK26" 2>&1)" || rc=$?
+rc_is $rc 0 "emit-dispositions-skeleton: bad finding IDs skipped, exits 0"
+has "valid-id" "$(cat "$SK26/dispositions.json" 2>/dev/null)" "valid finding ID written to dispositions"
+hasnt "../evil" "$(cat "$SK26/dispositions.json" 2>/dev/null)" "path-traversal ID not written to dispositions"
+has "invalid" "$sk26out" "bad finding ID produces a warning in output"
 # EXPERIMENT marker -> top-level experiment:true, preserved by record-disposition
 SKE="$SKROOT/r_skel_exp"; mkdir -p "$SKE/findings"; mk_snapshot "$SKE"
 printf '2026-07-08T00:00:00Z eval leg 2\n' > "$SKE/EXPERIMENT"
@@ -529,6 +792,21 @@ hasnt "CONFIRMED" "$(cat "$AV/report.md")" "stale verdict gone from report after
 "$DIR/append-usage-log.sh" "$AV" >/dev/null
 rc=0; "$DIR/check-run-complete.py" "$AV" >/dev/null 2>&1 || rc=$?
 rc_is $rc 0 "check-run-complete passes with verify_queue/verification keys"
+# f26: path-traversal-shaped finding ID in a verdict JSON must be skipped with a warning.
+# The ID comes from verdict content (not filename), so write a verdict with a bad id field.
+AV_F26="$ANGEL_RUNS_ROOT/20260601T141500Z-f26"; mkdir -p "$AV_F26/verification" "$AV_F26/findings"
+echo "stub" > "$AV_F26/findings/adv.md"
+cat > "$AV_F26/findings-snapshot.json" <<'JSON'
+{"version":2,"project":"f26test","mode":"full","verdict":"OK","personas_run":["adv"],
+ "findings":[{"id":"good-id","severity":"important","title":"Good","personas":["adv"],"verification":null}]}
+JSON
+cat > "$AV_F26/verification/bad.json" <<'JSON'
+{"id":"../evil/path","verdict":"CONFIRMED","method":"ran","evidence":"injected"}
+JSON
+rc=0; avbad_err="$("$DIR/apply-verification.py" "$AV_F26" 2>&1 >/dev/null)" || rc=$?
+rc_is $rc 0 "apply-verification: bad finding ID in verdict file is skipped, exits 0"
+has "invalid" "$avbad_err" "bad finding ID in verdict produces warning"
+
 # all-criticals-refuted gating: an unverified Critical blocks the warning
 AV2="$ANGEL_RUNS_ROOT/20260601T150000Z-verify2"
 mkdir -p "$AV2/verification" "$AV2/findings"
@@ -569,6 +847,60 @@ assert u["totals"]["integrator"] is None, u["totals"]["integrator"]      # nor a
 print("rav-asserts-ok")
 PY
 rc_is $rc 0 "verifier lines aggregate into totals; not misfiled per-phase"
+
+# f22: aggregate-usage must pick the LAST non-stalled integrator entry, not the first.
+RSTALL="$ANGEL_RUNS_ROOT/20260601T165000Z-stall1"
+mkdir -p "$RSTALL/findings"; echo "stub" > "$RSTALL/findings/adv.md"
+cat > "$RSTALL/usage.jsonl" <<'JSONL'
+{"phase":"persona","name":"adv","model":"claude-sonnet-4-6","total_tokens":40000,"tool_uses":8,"duration_ms":50000,"started_at":"2026-06-01T16:50:00Z","ended_at":"2026-06-01T16:51:00Z","reader_pack":false}
+{"phase":"integrator","name":"integrator","model":"claude-fable-5[1m]","total_tokens":null,"tool_uses":null,"duration_ms":null,"started_at":null,"ended_at":null,"reader_pack":false,"note":"STALLED"}
+{"phase":"integrator","name":"integrator","model":"claude-opus-4-8[1m]","total_tokens":18000,"tool_uses":0,"duration_ms":90000,"started_at":"2026-06-01T17:10:00Z","ended_at":"2026-06-01T17:12:00Z","reader_pack":false}
+JSONL
+rc=0; python3 "$DIR/aggregate-usage.py" "$RSTALL" >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "aggregate-usage exits 0 with stalled+delivered integrator pair"
+rc=0; python3 - "$RSTALL" <<'PY' || rc=$?
+import json, sys
+u = json.load(open(sys.argv[1] + "/usage.json"))
+# The delivered (Opus) entry, not the stalled (Fable) entry, must be recorded.
+assert u["totals"]["integrator"]["model"] == "claude-opus-4-8[1m]", \
+    f"expected Opus (delivered) integrator, got {u['totals']['integrator']}"
+assert u["totals"]["integrator"]["total_tokens"] == 18000, \
+    f"expected 18000 tokens from delivered entry, got {u['totals']['integrator']}"
+print("stall-integrator-ok")
+PY
+rc_is $rc 0 "aggregate-usage: stalled+delivered pair attributes Opus (delivered), not Fable (stalled)"
+
+# f21: reconciler + verifier phase buckets must appear in totals as arrays.
+RRC="$ANGEL_RUNS_ROOT/20260601T170000Z-recon1"
+mkdir -p "$RRC/findings"; echo "stub" > "$RRC/findings/adv.md"
+cat > "$RRC/usage.jsonl" <<'JSONL'
+{"phase":"persona","name":"adv","model":"claude-sonnet-4-6","total_tokens":40000,"tool_uses":8,"duration_ms":50000,"started_at":"2026-06-01T17:05:00Z","ended_at":"2026-06-01T17:06:00Z","reader_pack":false}
+{"phase":"reconciler","name":"reconciler-1","model":"claude-haiku-4-5","total_tokens":5000,"tool_uses":2,"duration_ms":10000,"started_at":null,"ended_at":null,"reader_pack":false}
+{"phase":"reconciler","name":"reconciler-2","model":"claude-haiku-4-5","total_tokens":6000,"tool_uses":2,"duration_ms":12000,"started_at":null,"ended_at":null,"reader_pack":false}
+{"phase":"verifier","name":"f3","model":"claude-sonnet-4-6","total_tokens":8000,"tool_uses":3,"duration_ms":30000,"started_at":null,"ended_at":null,"reader_pack":false}
+JSONL
+rc=0; python3 "$DIR/aggregate-usage.py" "$RRC" >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "aggregate-usage exits 0 with reconciler+verifier lines"
+rc=0; python3 - "$RRC" <<'PY' || rc=$?
+import json, sys
+u = json.load(open(sys.argv[1] + "/usage.json"))
+# Total includes all phases
+assert u["totals"]["total_tokens"] == 59000, u["totals"]["total_tokens"]
+# reconcilers array present with 2 entries
+assert "reconcilers" in u["totals"], "reconcilers bucket missing from totals"
+assert len(u["totals"]["reconcilers"]) == 2, u["totals"]["reconcilers"]
+assert u["totals"]["reconcilers"][0]["name"] == "reconciler-1", u["totals"]["reconcilers"][0]
+assert u["totals"]["reconcilers"][1]["total_tokens"] == 6000, u["totals"]["reconcilers"][1]
+# verifiers array present with 1 entry
+assert "verifiers" in u["totals"], "verifiers bucket missing from totals"
+assert len(u["totals"]["verifiers"]) == 1, u["totals"]["verifiers"]
+assert u["totals"]["verifiers"][0]["name"] == "f3", u["totals"]["verifiers"][0]
+# personas array has only the persona entry (not contaminated by reconcilers/verifiers)
+assert len(u["totals"]["personas"]) == 1, u["totals"]["personas"]
+assert u["totals"]["personas"][0]["name"] == "adv", u["totals"]["personas"][0]
+print("reconciler-verifier-bucket-ok")
+PY
+rc_is $rc 0 "reconciler/verifier phase buckets appear in totals as separate arrays"
 
 echo
 echo "--- subsample-analyzer + shared matcher suite (test_subsample.py) ---"

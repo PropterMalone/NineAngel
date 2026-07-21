@@ -149,8 +149,59 @@ def test_end_to_end():
     check(len(inst2) == 0, "e2e: persona with <2 passes is skipped")
 
 
+import importlib.util as _ilu
+
+def _load_rp():
+    spec = _ilu.spec_from_file_location("recurrence_pilot", DIR / "recurrence-pilot.py")
+    mod = _ilu.module_from_spec(spec)
+    # recurrence-pilot imports persona_aliases + finding_match from its parent dir;
+    # sys.path already has DIR prepended at the top of this file.
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_recurrence_pilot_core():
+    """f14: ts_to_epoch must use real calendar math, not 31-day months."""
+    rp = _load_rp()
+
+    # Basic round-trip: known timestamps -> known epochs.
+    e_jan01 = rp.ts_to_epoch("20260101T000000Z")
+    e_jan02 = rp.ts_to_epoch("20260102T000000Z")
+    check(e_jan02 - e_jan01 == 86400, "ts_to_epoch: Jan 1→Jan 2 is exactly 86400s")
+
+    # June has 30 days. A 30-min gap crossing June30→July1 must be ~1800s, not ~88200s.
+    e_jun30 = rp.ts_to_epoch("20260630T235000Z")  # 23:50 on June 30
+    e_jul01 = rp.ts_to_epoch("20260701T000000Z")   # 00:00 on July 1
+    gap_s = e_jul01 - e_jun30
+    check(600 <= gap_s <= 700, "ts_to_epoch: June30 23:50 → July1 00:00 is ~600s, not ~88200s",
+          f"got {gap_s}s")
+
+    # Window edge: classify_pair uses gap_min; 10-min gap crossing June30→July1
+    # must be replicate if window_min >= 10 (same cal), temporal if window_min < 10.
+    # (The old 31-day-month formula inflated this to ~1450 min, always "temporal".)
+    a = {"ts_epoch": e_jun30, "cal": "baseline"}
+    b = {"ts_epoch": e_jul01, "cal": "baseline"}
+    result_narrow = rp.classify_pair(a, b, 5)    # window=5min < 10min real gap
+    result_wide   = rp.classify_pair(a, b, 90)   # window=90min > 10min real gap
+    check(result_narrow == "temporal",
+          "classify_pair: month-boundary gap outside window -> temporal",
+          f"got {result_narrow!r}")
+    check(result_wide == "replicate",
+          "classify_pair: month-boundary gap inside window, same cal -> replicate",
+          f"got {result_wide!r}")
+
+    # Same-day, same-cal, within window -> replicate (sanity check).
+    e_a = rp.ts_to_epoch("20260615T120000Z")
+    e_b = rp.ts_to_epoch("20260615T120500Z")  # 5 min later
+    a2 = {"ts_epoch": e_a, "cal": "baseline"}
+    b2 = {"ts_epoch": e_b, "cal": "baseline"}
+    check(rp.classify_pair(a2, b2, 90) == "replicate",
+          "classify_pair: intra-day 5-min same-cal gap -> replicate")
+
+
 test_matcher()
 test_core()
 test_end_to_end()
+test_recurrence_pilot_core()
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

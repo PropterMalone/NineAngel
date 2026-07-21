@@ -2,8 +2,9 @@
 id: 10-cross-leg-auto-attach-on-full
 name: Auto-attach the cross-model leg on --full/--all + enrich its log for precision
 date: 2026-07-15
-status: active
+status: superseded-in-part
 supersedes: null
+superseded_note: "2026-07-18 the user extended cross-default-on to every interactive run (not just --full/--all) per SKILL.md §5.6 decision note. The measurability enhancements (had_angel_report, fid, xreview-dispositions.py) remain active. The --full/--all-only trigger is the superseded part."
 commits: [1211ba6]
 ---
 

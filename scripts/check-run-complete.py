@@ -25,12 +25,36 @@ BALL_RE = re.compile(r"_ball(\d+)\.md$")
 def multiball_n(run_dir, snap):
     """Infer the pass count N for a multiball run, else None.
 
-    Prefer the snapshot's `multiball` field (an int N); fall back to counting
-    the `<persona>_ball<i>.md` passes on disk. JSON `false`/absent → single-pass."""
+    Priority: (1) snapshot's `multiball` int field; (2) MULTIBALL marker file
+    (written by the orchestrator at run start, per SKILL.md §3.4); (3) passes/
+    dir (written by Stage-1 reconcilers, per ADR-11); (4) legacy _ball*.md
+    files in findings/ (back-compat). JSON `false`/absent → single-pass."""
     if isinstance(snap, dict):
         mb = snap.get("multiball")
         if not isinstance(mb, bool) and isinstance(mb, int) and mb >= 2:
             return mb
+    # MULTIBALL marker (new canonical signal — one-line integer file)
+    marker = run_dir / "MULTIBALL"
+    if marker.is_file():
+        try:
+            n = int(marker.read_text().strip())
+            if n >= 2:
+                return n
+        except (ValueError, OSError):
+            pass
+    # passes/ dir (ADR-11 stage-1 artifacts)
+    pdir = run_dir / "passes"
+    if pdir.is_dir() and any(pdir.glob("*.md")):
+        # count distinct pass indices from filenames like {persona}-p{i}.md
+        import re as _re
+        pidx = set()
+        for f in pdir.glob("*-p*.md"):
+            m = _re.search(r"-p(\d+)\.md$", f.name)
+            if m:
+                pidx.add(int(m.group(1)))
+        if len(pidx) >= 2 or (pidx and max(pidx) >= 2):
+            return max(pidx) if pidx else 2
+    # legacy _ball*.md files (back-compat)
     fdir = run_dir / "findings"
     if fdir.is_dir():
         idx = [int(m.group(1)) for f in fdir.glob("*_ball*.md")

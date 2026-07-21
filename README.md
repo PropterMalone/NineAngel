@@ -36,12 +36,14 @@ NineAngel auto-detects which personas are relevant to your project from signals 
 | `hyper`    | always                                | Hypercritical — over-engineering, cargo-cult patterns, lazy abstractions        |
 | `blindspot`| always (full-project mode only)       | Finds capabilities, safeguards, states, or flows entirely absent from the code  |
 | `future`   | always                                | Future-Me — code clever only today, missing "why" comments, implicit coupling   |
-| `user`     | UI / public API / CLI / README        | UX walkthrough — meaningless errors, silent failures, broken flows              |
-| `fresh`    | package.json / lockfile / CI config   | Freshness — stale deps, hardcoded URLs/dates, deprecated patterns               |
-| `test`     | tests dir / package.json              | Tests — test mocks not behavior, missing edge cases, assertions that can't fail |
+| `rtfm`     | always                                | Checks code against authoritative docs — spec violations, unused doc'd APIs     |
+| `user`     | UI / public API / CLI                 | UX walkthrough — meaningless errors, silent failures, broken flows              |
+| `test`     | tests dir                             | Tests — test mocks not behavior, missing edge cases, assertions that can't fail |
 | `data-int` | schema / SQL / DB driver dep          | Data-Integrity — FK/NOT-NULL audit, sync-adapter effect verification            |
-| `perf`     | runtime code / hot-path indicators    | Performance — O(n²), DB queries in loops, allocation patterns                   |
+| `perf`     | hot-path indicators                   | Performance — O(n²), DB queries in loops, allocation patterns                   |
 | `coach`    | prompt files (personas, skills)       | Reviews agent prompts — alignment + execution                                   |
+| `editor`   | prose artifacts                       | Prose quality — clarity, structure, tone, wasted words in docs/READMEs/ADRs    |
+| `rigor`    | prose artifacts                       | Analytical rigour — unsupported claims, vague hedges, missing falsifiers        |
 
 **Opt-in** (named explicitly):
 
@@ -49,11 +51,15 @@ NineAngel auto-detects which personas are relevant to your project from signals 
 |-------------|---------------------------------------------------------------------------------------------|
 | `install`   | Tests the soup-to-nuts install flow as a non-developer (runs project commands — opt-in by design) |
 | `thousand`  | Thousand-foot — wrong abstraction level, scope creep, simpler approaches (opt-in since the 2026-06-06 Blindspot↔Thousand swap) |
+| `fresh`     | Freshness — stale deps, hardcoded URLs/dates, deprecated patterns (demoted ADR-07) |
+| `heir`      | Cold-start handoff audit — can a never-met operator + AI agent use/understand/troubleshoot/modify this? (**experimental**) |
 | `penny`     | Cost reviewer — lines, bytes, MB, $, cognitive load, maintenance burden ("rent test"; **experimental**) |
 | `pii`       | Raw-PII detector — personal data in logs, fixtures, dumps, serializers (**experimental**; runs first in the privacy pair) |
 | `deanon`    | Re-identification attacker — quasi-identifiers, reversible pseudonyms, linkage (**experimental**; always runs after `pii`) |
 
 Each persona's frontmatter (`personas/<short>.md`) declares its `default`, `modes`, `experimental` flag, and required signals. The orchestrator reads this at preflight; the frontmatter is the source of truth.
+
+Experimental personas (`penny`, `pii`, `deanon`, `heir`) are excluded from auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria.
 
 ## Usage
 
@@ -62,12 +68,16 @@ Each persona's frontmatter (`personas/<short>.md`) declares its `default`, `mode
 /angel --full                 # auto-detected battery, whole-project review
 /angel naive adv              # only specific personas (bypasses detection)
 /angel --all                  # every default-yes persona (ignores signals)
+/angel --micro                # minimal-core profile: adv+hyper+data-int (if signaled), ~0.4–0.6M tokens
 /angel -perf                  # standard battery minus Performance
 /angel --loop                 # review → fix → re-review (max 3 cycles)
 /angel penny --full           # opt-in persona on the whole project
 /angel --multiball[=N]        # default-ON interactive at N=2 (N=3 on --full/--all); pass =N to override; integrator reconciles
 /angel --balls N              # explicit multiball pass-count override (alias for --multiball=N)
 /angel --no-multiball         # force single-pass (off-switch; alias: --single)
+/angel --cross                # cross-model second opinion (default-ON for interactive; --no-cross to suppress)
+/angel --no-cross             # suppress the default cross-model leg (§5.6)
+/angel --no-verify            # skip the adversarial verification stage (§5.7; default ON when verify_queue is non-empty)
 /angel --model-override <tier># force all personas to one tier (haiku|sonnet|opus|fable); integrator unaffected (SKILL.md §5)
 /angel --reader               # enable the Bundle Reader (permanently default-off per ADR-01 — calibration showed no upside)
 /angel --fix-last             # apply the last review's fix batch in this project
@@ -96,7 +106,7 @@ Restart Claude Code. To verify the install: type `/help` in Claude Code; `/angel
 1. **Battery selection.** The orchestrator scans the project tree for signals (file types, configs, deps) and selects the personas whose triggers match. Named personas bypass detection; `--all` runs everything default-yes.
 2. **Pre-flight gate.** Before any persona runs, Claude Code runs the project's tests, build, and linter (if configured). A red gate aborts the review — no point reviewing code that doesn't compile.
 3. **Parallel dispatch.** Each selected persona runs as an independent Agent-tool subagent on its own model tier (Haiku / Sonnet / Opus depending on workload). None see the others' findings. The project's CLAUDE.md and diff are wrapped in untrusted-content envelopes so prompt-injection attempts in reviewed code surface as findings rather than altering persona behavior.
-4. **Integration.** The Integrator (always Opus) collects raw outputs, sanitizes them, deduplicates cross-persona overlap, ranks by severity × consensus × effort, renders a Top 5, and produces a verdict: APPROVED / APPROVED (with suggestions) / CHANGES RECOMMENDED / CHANGES REQUIRED.
+4. **Integration.** The Integrator (model selected via a size-dependent ladder — Fable[1m] when available, else Opus[1m], else inline; see `docs/decisions/04`) collects raw outputs, sanitizes them, deduplicates cross-persona overlap, ranks by severity × consensus × effort, renders a Top 5, and produces a verdict: APPROVED / APPROVED (with suggestions) / CHANGES RECOMMENDED / CHANGES REQUIRED.
 5. **Optional loop.** With `--loop`, fixes are dispatched to a coding subagent and the battery re-runs (max 3 cycles). Line-level findings converge fast; architectural findings ("wrong abstraction") often persist and need human attention.
 6. **Per-project handoff.** A handoff file (review summary + ranked findings) and a machine-consumable fix-batch are written to `~/.claude/projects/{encoded-cwd}/memory/`. `/angel --fix-last` (later, in the same project directory) dispatches the fix-batch to a coding subagent.
 
@@ -127,9 +137,22 @@ Support tooling in `scripts/` (each script's header docstring is authoritative):
 - `finalize-calibration.py` — internal/retired: paired baseline+reader A/B markers for the concluded reader calibration (ADR-01).
 - `test_scripts.sh` — smoke tests pinning the script contracts. Run `bash scripts/test_scripts.sh`.
 
+## External dependencies
+
+NineAngel has a few out-of-repo dependencies. Missing ones degrade gracefully (the run continues with a note), except `python3` and `bash` which are hard requirements.
+
+| Dependency | Used by | If absent |
+|---|---|---|
+| `bash`, `git`, `python3`, `jq` | core scripts (`init-run.sh`, `finalize-run.sh`, `record-dispatch.sh`) | hard failure — required |
+| `~/.claude/scripts/xreview.py` | cross-model leg (§5.6, default-ON interactive) | run logs `cross: failed (xreview.py not found)` — leg skipped, review continues |
+| backends `agy` / `codex` | xreview.py routing | xreview.py handles its own backend routing; a missing backend logs `cross: failed ({reason})` |
+| `/code` skill (Claude Code) | `--fix-last` and `--loop` fix dispatch | fallback: dispatch any coding subagent with the same preamble from `angel-fix-batch.md`; the fix-batch file is always written and human-readable |
+
+**Fresh-clone check**: after cloning, run `bash scripts/test_scripts.sh` to verify the core scripts work. The cross leg and fix-dispatch rely on out-of-repo tools that the test suite does not exercise — confirm `xreview.py` exists and the `/code` skill is available before relying on those features.
+
 ## Status
 
-Personal tool, used in production by the author. Stable enough to rely on; the persona roster evolves as new failure modes are encountered. Personas marked `experimental` in their frontmatter (currently `penny`, `pii`, and `deanon`) are excluded from the auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria. (`blindspot` graduated to the default battery in the 2026-06-06 swap with `thousand`.)
+Personal tool, used in production by the author. Stable enough to rely on; the persona roster evolves as new failure modes are encountered. Personas marked `experimental` in their frontmatter (currently `penny`, `pii`, `deanon`, and `heir`) are excluded from the auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria. (`blindspot` graduated to the default battery in the 2026-06-06 swap with `thousand`; `editor` and `rigor` added 2026-07.)
 
 ## License
 

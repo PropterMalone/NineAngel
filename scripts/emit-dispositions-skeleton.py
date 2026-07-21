@@ -18,8 +18,11 @@ Usage: emit-dispositions-skeleton.py <run_dir>
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
+
+FINDING_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 
 def main():
@@ -63,6 +66,10 @@ def main():
             continue
         if fid == "experiment":  # would collide with the marker key
             print("warning: finding id 'experiment' collides with marker key, skipped", file=sys.stderr)
+            continue
+        if not FINDING_ID_RE.match(fid):
+            print(f"warning: finding id {fid!r} fails charset check "
+                  f"(must match ^[a-zA-Z0-9_-]{{1,64}}$), invalid — skipped", file=sys.stderr)
             continue
         # record-disposition.py's entry schema; recorded_at stays null until a
         # real disposition lands ("no-record" was never recorded by anyone).

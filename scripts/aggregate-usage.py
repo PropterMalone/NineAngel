@@ -66,7 +66,17 @@ def aggregate(entries, run_dir, snapshot):
     total_tokens = sum(measured) if measured else None
 
     reader = next((x for x in entries if x.get("phase") == "reader"), None)
-    integrator = next((x for x in entries if x.get("phase") == "integrator"), None)
+    # Pick the last integrator entry that has no STALLED/KILLED note; fall back to
+    # last entry overall. A stalled/killed first attempt logged before a delivered
+    # second attempt must not corrupt model-attribution data (f22).
+    integrator_entries = [x for x in entries if x.get("phase") == "integrator"]
+    integrator = None
+    if integrator_entries:
+        delivered = [x for x in integrator_entries
+                     if (x.get("note") or "").upper() not in ("STALLED", "KILLED")]
+        integrator = delivered[-1] if delivered else integrator_entries[-1]
+    reconciler_entries = [x for x in entries if x.get("phase") == "reconciler"]
+    verifier_entries = [x for x in entries if x.get("phase") == "verifier"]
 
     unmeasured = [
         f"{x.get('phase', '?')}:{x.get('name', '?')}"
@@ -80,6 +90,15 @@ def aggregate(entries, run_dir, snapshot):
         sev = f.get("severity")
         if sev in findings:
             findings[sev] += 1
+
+    # Read the reviewed project's git HEAD from PROJECT_COMMIT (written by init-run.sh).
+    # "null" (string) means non-git or git unavailable; absent file means unknown (pre-f34).
+    project_commit_path = Path(run_dir) / "PROJECT_COMMIT"
+    if project_commit_path.is_file():
+        raw = project_commit_path.read_text().strip()
+        project_commit = None if raw == "null" else (raw or None)
+    else:
+        project_commit = None
 
     return {
         "run_dir": str(run_dir),
@@ -98,9 +117,18 @@ def aggregate(entries, run_dir, snapshot):
                 if x.get("phase") == "persona"
             ],
             "integrator": phase_record(integrator, ("model", "total_tokens", "duration_ms", "tool_uses")) if integrator else None,
+            "reconcilers": [
+                phase_record(x, ("name", "model", "total_tokens", "duration_ms", "tool_uses"))
+                for x in reconciler_entries
+            ],
+            "verifiers": [
+                phase_record(x, ("name", "model", "total_tokens", "duration_ms", "tool_uses"))
+                for x in verifier_entries
+            ],
         },
         "unmeasured": unmeasured,
         "skill_commit": None,  # filled by the shell
+        "project_commit": project_commit,
         "verdict": snapshot.get("verdict"),
         "findings": findings,
     }

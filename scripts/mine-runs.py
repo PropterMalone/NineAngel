@@ -89,9 +89,13 @@ def main():
     ap.add_argument("--runs-dir", default=str(Path.home() / ".angel" / "runs"))
     ap.add_argument("--since", default=None, help="YYYY-MM-DD floor (inclusive)")
     ap.add_argument("--json", action="store_true", help="emit machine JSON instead of report")
+    ap.add_argument("--skill-dir", default=None,
+                    help="path to skill root for alias map (default: parent of this script); "
+                         "mirrors validate-personas.py --skill-dir for fixture testing")
     args = ap.parse_args()
 
-    amap = build_persona_aliases(Path(__file__).resolve().parent.parent)
+    skill_dir = Path(args.skill_dir).resolve() if args.skill_dir else Path(__file__).resolve().parent.parent
+    amap = build_persona_aliases(skill_dir)
 
     runs_dir = Path(args.runs_dir)
     if not runs_dir.is_dir():
@@ -113,7 +117,9 @@ def main():
     pcited = defaultdict(int)                     # findings with cited-spec/code-site evidence
     pev = defaultdict(int)                        # findings carrying any evidence value
     pdisp = defaultdict(int)                      # findings with a recorded disposition
-    pfp = defaultdict(int)                        # findings dispositioned rejected-wrong (false positives)
+    pfp = defaultdict(int)                        # false positives: human rejected-wrong OR machine REFUTED
+    pfp_human = defaultdict(int)                  # human rejected-wrong only
+    pfp_machine = defaultdict(int)                # machine REFUTED only
     runs_with_evidence = 0
     runs_with_disp = 0
 
@@ -183,6 +189,10 @@ def main():
                 d_val = None  # skeleton placeholder = untriaged, not disposed
             if sev == "critical":
                 criticals.append((date, project, f.get("title") or "(untitled)", ",".join(ps)))
+            # Machine verification signal: REFUTED counts as a false-positive source,
+            # distinguished from human rejected-wrong so callers can audit each channel.
+            verif = f.get("verification") if isinstance(f, dict) else None
+            machine_refuted = (isinstance(verif, dict) and verif.get("verdict") == "REFUTED")
             for p in ps:
                 pfind[p] += 1
                 psev[p][sev] += 1
@@ -194,6 +204,10 @@ def main():
                     pdisp[p] += 1
                     if d_val == "rejected-wrong":
                         pfp[p] += 1
+                        pfp_human[p] += 1
+                if machine_refuted:
+                    pfp[p] += 1
+                    pfp_machine[p] += 1
             if len(ps) == 1:
                 psolo[ps[0]] += 1
                 psev_solo[ps[0]][sev] += 1
@@ -249,6 +263,8 @@ def main():
                     "severity_total": dict(psev[p]), "severity_solo": dict(psev_solo[p]),
                     "cited": pcited[p], "evidence_present": pev[p],
                     "disposed": pdisp[p], "false_positives": pfp[p],
+                    "human_false_positives": pfp_human[p],
+                    "machine_false_positives": pfp_machine[p],
                     "tokens": ptokens[p] if ptoken_runs[p] else None,
                     "tokens_runs": ptoken_runs[p],
                 } for p in personas

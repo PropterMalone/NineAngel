@@ -215,7 +215,7 @@ The highest-impact findings to fix first, ranked by severity × consensus × eff
 *Review by NineAngel — {date}*
 ```
 
-Then immediately follow with the findings snapshot block:
+Write the findings snapshot to `$RUN_DIR/findings-snapshot.json` (per the file-based contract — do NOT emit inline):
 
 ````
 ```json findings-snapshot
@@ -255,6 +255,7 @@ Then immediately follow with the findings snapshot block:
     "total_wall_clock_s": null
   },
   "codebase": {"lines": null, "files": null},
+  "multiball": null,
   "within_persona_runs": null,
   "verify_queue": [
     {"id": "f1", "severity": "critical", "title": "...", "file": "src/foo.ts", "line": "42", "claim": "one-sentence causal mechanism to attack", "repro_hint": "optional cheap check"}
@@ -275,6 +276,7 @@ Snapshot rules:
 - `resource_consumption` token fields are **legacy** — superseded by the per-Agent usage meter (`usage.json`, SKILL.md §8a), which is the cost source of truth. Leave them `null`; downstream cost/calibration analysis reads `usage.json`, not this block. Do not fabricate an input/output split to fill them.
 - The orchestrator passes `reader_mode` to you in the input block — pass it through.
 - `personas_run` is the persona short-names (matches the SKILL mapping table), not display names.
+- `multiball`: the integer N when the run was multiball (N≥2); `null` for single-pass runs. The orchestrator passes this from §4's N-resolution.
 - `within_persona_runs` (schema v2, **multiball only** — `null` otherwise): the per-pass STRUCTURED findings, BEFORE within-persona reconciliation, so downstream tooling can subsample any k≤N passes to tune the optimal N and measure per-persona reproducibility. Shape: `{ "<persona>": [ [ {finding}, ... ] (pass 1), [ ... ] (pass 2), ... ] }`, where each `{finding}` carries at minimum `severity`, `title`, `file`, `line` (same fields as the `findings` array entries; `personas`/`id` not needed here — these are pre-dedup, single-persona). Emit one sub-array per pass per persona, in dispatch order. This is in ADDITION to the reconciled `findings` array, which stays the human-facing deduped result.
 
 Rules for the markdown report:
@@ -285,7 +287,7 @@ Rules for the markdown report:
 
 ## Registry updates (third output block — pii / deanon only)
 
-If `pii` or `deanon` was among the personas, emit a THIRD fenced block after the findings-snapshot — the inputs to the per-project PII registry (the De-Anon → PII-Sweep learning loop; SKILL.md §7.7). If neither ran, omit the block entirely.
+If `pii` or `deanon` was among the personas, write a `$RUN_DIR/registry-updates.json` file (a JSON array; no code fence) — the inputs to the per-project PII registry (the De-Anon → PII-Sweep learning loop; SKILL.md §7.7). If neither ran, omit the file entirely.
 
 Populate it from the **deduplicated findings you just produced**, not raw persona text:
 - **De-Anon findings that "got home"** — every Critical/Important De-Anon finding that names a concrete identifying field, column, or quasi-identifier set. This is the primary, high-value path: a proven re-identification becomes a cheap detection rule for PII-Sweep on later runs. `kind` ∈ {`quasi-identifier`, `reversible-pseudonym`, `metadata-side-channel`, `high-dimensional`, …}.

@@ -22,8 +22,11 @@ Usage: apply-verification.py <RUN_DIR>
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
+
+FINDING_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 SECTION_HEADING = "## Verification"
 VALID_VERDICTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED")
@@ -118,6 +121,10 @@ def load_verdicts(verdict_files):
         fid = v.get("id") if isinstance(v, dict) else None
         if not fid:
             print(f"warning: verdict {vf.name} has no finding id, skipped", file=sys.stderr)
+            continue
+        if not FINDING_ID_RE.match(fid):
+            print(f"warning: verdict {vf.name} finding id {fid!r} fails charset check "
+                  f"(must match ^[a-zA-Z0-9_-]{{1,64}}$), invalid — skipped", file=sys.stderr)
             continue
         if v.get("verdict") not in VALID_VERDICTS:
             print(f"warning: verdict {vf.name} has invalid verdict "
