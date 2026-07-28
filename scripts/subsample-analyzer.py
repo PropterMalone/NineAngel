@@ -43,11 +43,16 @@ from math import comb
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # runs as __main__ from any CWD
-from finding_match import SEV_RANK, finding_match, normalize_finding
+from finding_match import (
+    SEV_RANK, finding_match, normalize_finding,
+    persona_passes_analyzable, wpr_is_analyzable,
+)
 
 
 # ============================ FUNCTIONAL CORE ============================
 # Pure: no I/O. Clustering + recall math, unit-testable in isolation.
+# (within_persona_runs shape predicates live in finding_match.py — shared with
+# persona-overlap.py; re-exported above so ss.wpr_is_analyzable stays available.)
 
 def cluster_pass_sets(passes, threshold):
     """passes: list (per pass) of lists of matcher-ready finding dicts.
@@ -119,12 +124,19 @@ def passes_for_severity(raw_passes, severity):
 # ============================ IMPERATIVE SHELL ============================
 
 def iter_snapshots(files, runs_dir):
-    """Yield (label, within_persona_runs dict) for snapshots that have one."""
+    """Return (snapshots, skipped).
+
+    snapshots: list of (label, within_persona_runs) with the analyzable structured
+    per-pass shape. skipped: list of (label, reason) for snapshots that carry a
+    within_persona_runs but in a broken/unanalyzable shape (the 2026-07 inline-mode
+    id-ref runs). Skipping is reported by main(), never silent — and it stops one
+    bad snapshot from crashing the whole scan (AttributeError in normalize_finding)."""
     paths = list(files)
     if not paths and runs_dir:
         rd = Path(runs_dir).expanduser()
         if rd.is_dir():
             paths = sorted(rd.glob("*/findings-snapshot.json"))
+    snaps, skipped = [], []
     for p in paths:
         p = Path(p)
         try:
@@ -135,7 +147,12 @@ def iter_snapshots(files, runs_dir):
         if not wpr:  # null or empty -> not a multiball run
             continue
         label = p.parent.name if p.name == "findings-snapshot.json" else p.name
-        yield label, wpr
+        if not wpr_is_analyzable(wpr):
+            skipped.append((label, "unanalyzable within_persona_runs shape "
+                                   "(id-ref/prose, not structured per-pass findings)"))
+            continue
+        snaps.append((label, wpr))
+    return snaps, skipped
 
 
 def analyze(snapshots, threshold, severity):
@@ -146,6 +163,8 @@ def analyze(snapshots, threshold, severity):
     instances = []  # {label, persona, n, clusters, full, curve, repro}
     for label, wpr in snapshots:
         for persona, raw_passes in wpr.items():
+            if not persona_passes_analyzable(raw_passes):
+                continue  # broken id-ref/prose shape — skip, don't crash normalize_finding
             n = len(raw_passes)
             if n < 2:
                 continue
@@ -199,14 +218,16 @@ def main():
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    snaps = list(iter_snapshots(args.snapshots, None if args.snapshots else args.runs_dir))
+    snaps, skipped = iter_snapshots(args.snapshots, None if args.snapshots else args.runs_dir)
     instances, agg_curves, per_persona = analyze(snaps, args.threshold, args.severity)
 
     if args.json:
         print(json.dumps({
             "params": {"threshold": args.threshold, "severity": args.severity},
             "coverage": {"multiball_snapshots": len(snaps),
-                         "persona_instances": len(instances)},
+                         "persona_instances": len(instances),
+                         "skipped_snapshots": len(skipped)},
+            "skipped": [{"label": lbl, "reason": reason} for lbl, reason in skipped],
             "recall_curve_by_n": {
                 str(n): {"instances": c["instances"], "findings": c["findings"],
                          "recall": {str(k): v for k, v in c["recall"].items()}}
@@ -219,6 +240,10 @@ def main():
     L.append(f"Params: title-overlap threshold **{args.threshold}**, severity **{args.severity}**.")
     L.append(f"Coverage: **{len(snaps)}** multiball snapshot(s), **{len(instances)}** persona instances "
              f"(a persona with ≥2 passes and ≥1 finding in one snapshot).")
+    if skipped:
+        L.append("")
+        L.append(f"Skipped **{len(skipped)}** snapshot(s) with an unanalyzable `within_persona_runs` shape "
+                 f"(id-ref/prose, not structured per-pass findings): {', '.join(lbl for lbl, _ in skipped)}.")
     L.append("")
     if not instances:
         L.append("_No multiball data yet — `within_persona_runs` is null on all snapshots. "

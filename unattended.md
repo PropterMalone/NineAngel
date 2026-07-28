@@ -10,6 +10,7 @@ Procedure for unattended `claude -p` runs (e.g., the job queue). No user interac
 - `MODE` (optional): `diff` | `full`. Defaults to `full` for unattended runs.
 - `MODEL_OVERRIDE` (optional): force all personas to `haiku` | `sonnet` | `opus` | `fable` ("budget mode"). Default is per-persona.
 - `READER` (optional): `on` | `off`. Enables the bundle reader (Step 2.6) — produces per-persona context packs. Default: `off`, permanently per `docs/decisions/01-reader-default-off.md` (calibration showed it costs more, not less). Revisit only after a slicer re-implementation.
+- `ARTIFACT` (optional): comma-separated path(s) to the **rendered artifact(s)** for the Recipient persona (`recip`) — the output the system emits, not its source. Consulted first when `PERSONAS` includes `recip`; if unset, fall back to committed outputs (`examples/`, `fixtures/`, `samples/`, snapshots, `*.golden`); if none are found, **skip Recipient and record the skip + reason in the report**. Never run it blind, and never run the producing command to generate an artifact (that is target-repo code execution outside pre-flight). A missing `ARTIFACT` is not an error — walk the fallback chain. See SKILL.md §1 "Artifact gate for Recipient."
 - `RUN_TAG` (optional): short string suffix appended to handoff and findings-snapshot filenames (e.g., `baseline`, `reader`). Used when two unattended runs hit the same project dir on the same day (e.g., A/B calibration) — without it, the second run clobbers the first's outputs. Default: no suffix.
 
 ### Unsupported in unattended mode
@@ -125,6 +126,8 @@ Launch personas as parallel subagents via the Agent tool. Use the per-persona mo
 
 **Registry context (pii / deanon).** When composing the prompt for `pii` or `deanon`, append a `<pii_registry>` block with the contents of `$HANDOFF_DIR/pii-registry.md` (or the literal `(no registry yet)` if absent), exactly as SKILL.md §4 → "Registry context" describes. New entries are merged back in Step 6.7.
 
+**Artifact context (recip).** When composing the prompt for `recip`, append an `<artifact_paths>` block after the `## Your Persona` tail, carrying the resolved **absolute** path(s) from `ARTIFACT` — one per line — exactly as SKILL.md §4 → "Artifact context (recip)" describes. A subagent's cwd is not the project root, so resolve relative paths before composing. If the `ARTIFACT` fallback chain produced no paths, **skip `recip` and record the reason** (Step 3.5 failure capture) — never dispatch it without the block.
+
 After each persona returns: (1) append a `"phase":"persona"` line to `$RUN_DIR/usage.jsonl` (Step 2.5.5); (2) write the persona's verbatim findings block to `$RUN_DIR/findings/{name}.md` — mandatory in every mode, even when the persona reported nothing (a `## No findings` stub is valid data). Preferred: one `scripts/record-dispatch.sh --findings "$RUN_DIR" persona <name> <model> ...` call with the findings block on stdin does both writes. This matches SKILL.md §4 and is what `scripts/mine-runs.py` and `check-run-complete.py` consume; skipping it is what left unattended runs unminable.
 
 Per-persona models (this table is the source of truth alongside SKILL.md §1):
@@ -151,6 +154,7 @@ Per-persona models (this table is the source of truth alongside SKILL.md §1):
 | pii | `pii.md` | `claude-haiku-4-5-20251001` |
 | deanon | `deanon.md` | `claude-fable-5[1m]` |
 | heir | `heir.md` | `claude-fable-5[1m]` |
+| recip | `recipient.md` | `claude-fable-5[1m]` |
 
 The integrator (Step 4) runs on `claude-fable-5[1m]` when Fable is working and won't incur a separate charge (on-subscription), else `claude-opus-4-8[1m]`, else inline integration — see Step 4 and SKILL.md §5.
 

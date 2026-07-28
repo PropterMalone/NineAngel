@@ -149,6 +149,34 @@ def test_end_to_end():
     check(len(inst2) == 0, "e2e: persona with <2 passes is skipped")
 
 
+# ---- broken-shape resilience (the 2026-07 inline-mode id-ref snapshots) ----
+def test_broken_shape():
+    """A within_persona_runs that persisted reconciled finding-IDs as bare strings
+    (or prose) instead of structured per-pass finding dicts must be SKIPPED, not
+    crashed on. One such snapshot previously killed the whole --runs-dir scan
+    (AttributeError: 'str' object has no attribute 'get')."""
+    good = {"adv": [[{"severity": "critical", "file": "a.py", "title": "sql injection here"}],
+                    [{"severity": "critical", "file": "a.py", "title": "sql injection here"}]]}
+    idref = {"heir": [["f1", "f2", "f3"], ["f1", "f2", "f3"]]}      # bare id-strings (the crashing shape)
+    prose = {"x": ["consensus prose one", "consensus prose two"]}    # passes are strings, not lists
+    clean = {"naive": [[], []]}                                      # all-clean run: legit + analyzable
+
+    check(ss.wpr_is_analyzable(good), "broken: good structured shape is analyzable")
+    check(not ss.wpr_is_analyzable(idref), "broken: id-ref shape is NOT analyzable")
+    check(not ss.wpr_is_analyzable(prose), "broken: prose-string shape is NOT analyzable")
+    check(ss.wpr_is_analyzable(clean), "broken: all-clean [[],[]] IS analyzable")
+    check(not ss.wpr_is_analyzable({}), "broken: empty wpr is not analyzable")
+    check(not ss.wpr_is_analyzable(None), "broken: None wpr is not analyzable")
+
+    # analyze() must not crash on a broken snapshot and must drop it (0 instances).
+    inst, _, _ = ss.analyze([("broken", idref)], 0.5, "importantplus")
+    check(len(inst) == 0, "broken: id-ref snapshot yields 0 instances, no crash", f"got {inst}")
+    # A good snapshot alongside a broken one still analyzes — broken doesn't poison the batch.
+    inst2, _, _ = ss.analyze([("broken", idref), ("good", good)], 0.5, "importantplus")
+    check(len(inst2) == 1 and inst2[0]["persona"] == "adv",
+          "broken: good snapshot survives alongside a broken one", f"got {inst2}")
+
+
 import importlib.util as _ilu
 
 def _load_rp():
@@ -202,6 +230,7 @@ def test_recurrence_pilot_core():
 test_matcher()
 test_core()
 test_end_to_end()
+test_broken_shape()
 test_recurrence_pilot_core()
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -130,6 +130,11 @@ Add a `## Loop Status` section before `## Top 5` listing all `[persisted]` findi
 
 The report structure and snapshot schema below are unchanged — they're just written to files now instead of concatenated into your reply. Produce exactly this structure. Do not deviate.
 
+**Two rules the report body must not bend** (both from the 2026-07-28 `recip` dogfood — defects a reader hits, not an author):
+
+- **The `**Effort**` rollup is derived from the effort tags, mechanically — count them.** Prose in the verdict paragraph may characterize the batch ("mostly seam cleanups") but must never be the only total. A report that bounded 45 findings at "roughly an afternoon" while carrying two `[significant]` (1+ hours, design decision needed) items sent its reader to budget an afternoon they could not finish in one.
+- **Every finding location must be a paste-able path.** Never elide for line width — `docs/decisions/10-...:5` makes the reader glob before they can act. Write the full path or omit the location and say why.
+
 **Verdict is an enum, everywhere it appears** (report headline, return line, snapshot): exactly one of `APPROVED` | `APPROVED (with suggestions)` | `CHANGES RECOMMENDED` | `CHANGES REQUIRED`. No free-text suffixes or hybrids ("CHANGES REQUIRED — not cleanly shippable", "SHIP", "request-changes") — historical verdict drift made automated verdict-vs-outcome scoring impossible (eval leg 1 §4). Nuance goes in Integration Notes, not the verdict string.
 
 ```markdown
@@ -139,6 +144,7 @@ The report structure and snapshot schema below are unchanged — they're just wr
 **Files reviewed**: {count}
 **Pre-flight**: {pass/fail summary}
 **Findings**: {X critical, Y important, Z minor, W noted}
+**Effort**: {n} trivial · {m} moderate · {k} significant
 {if multiball: **Mode**: multiball N={N}}
 {if --loop cycle >1: **Cycle**: {N} of max 3}
 {if dropped_personas non-empty: **Skipped**: {comma-separated names} ({reasons compressed)}}

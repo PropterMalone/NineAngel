@@ -53,13 +53,24 @@ NineAngel auto-detects which personas are relevant to your project from signals 
 | `thousand`  | Thousand-foot — wrong abstraction level, scope creep, simpler approaches (opt-in since the 2026-06-06 Blindspot↔Thousand swap) |
 | `fresh`     | Freshness — stale deps, hardcoded URLs/dates, deprecated patterns (demoted ADR-07) |
 | `heir`      | Cold-start handoff audit — can a never-met operator + AI agent use/understand/troubleshoot/modify this? (**experimental**) |
+| `recip`     | Recipient — reads the **rendered artifact**, not the source: did the reader get what they came for? (**experimental**; full-mode only; needs `--artifact <path>`) |
 | `penny`     | Cost reviewer — lines, bytes, MB, $, cognitive load, maintenance burden ("rent test"; **experimental**) |
 | `pii`       | Raw-PII detector — personal data in logs, fixtures, dumps, serializers (**experimental**; runs first in the privacy pair) |
 | `deanon`    | Re-identification attacker — quasi-identifiers, reversible pseudonyms, linkage (**experimental**; always runs after `pii`) |
 
 Each persona's frontmatter (`personas/<short>.md`) declares its `default`, `modes`, `experimental` flag, and required signals. The orchestrator reads this at preflight; the frontmatter is the source of truth.
 
-Experimental personas (`penny`, `pii`, `deanon`, `heir`) are excluded from auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria.
+Experimental personas (`penny`, `pii`, `deanon`, `heir`, `recip`) are excluded from auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria.
+
+`recip` is the one persona that reviews **output** rather than source, so it needs the output handed to it:
+
+```
+/angel recip --full --artifact ./out/report.md    # review what the system emits
+```
+
+It is full-mode only: a diff never contains the artifact, so there is nothing for it to read in diff mode. To judge whether a change improved the output, run it against the artifact produced before and after.
+
+Without `--artifact` it looks for committed outputs (`examples/`, `fixtures/`, `samples/`, snapshots) and asks before using them. It never runs blind, and unattended runs skip it with a recorded reason rather than generating an artifact by executing project code.
 
 ## Usage
 

@@ -390,6 +390,41 @@ cat > "$RMB3/findings-snapshot.json" <<'JSON'
 JSON
 rc=0; "$DIR/check-run-complete.py" "$RMB3" >/dev/null 2>&1 || rc=$?; rc_is $rc 0 "passes/ dir + valid within_persona_runs passes"
 
+# ADR-12: element-level check rejects id-ref strings (version-independent — catches the
+# 3 broken 2026-07 inline snapshots on --all audits, no passes/ dir needed).
+REL="$ANGEL_RUNS_ROOT/r_idref"; mk_usage "$REL" 50000; echo stub > "$REL/findings/adv.md"; "$DIR/append-usage-log.sh" "$REL" >/dev/null
+cat > "$REL/findings-snapshot.json" <<'JSON'
+{"project":"x","mode":"full","multiball":2,"findings":[],"within_persona_runs":{"adv":[["f1","f2","f3"],["f1","f2","f3"]]}}
+JSON
+rc=0; "$DIR/check-run-complete.py" "$REL" >/dev/null 2>&1 || rc=$?; rc_is $rc 1 "id-ref within_persona_runs rejected (element check, version-independent)"
+
+# ADR-12: provenance gate — stored field must equal an assemble-wpr recompute from passes/.
+RPV="$ANGEL_RUNS_ROOT/r_prov"; mk_usage "$RPV" 50000; echo stub > "$RPV/findings/adv.md"
+mkdir -p "$RPV/passes"
+printf '#### Critical (blocks ship)\n- **race in writer** `[moderate]` — `a.py:10` — boom\n' > "$RPV/passes/adv-p1.md"
+printf '#### Critical (blocks ship)\n- **race in writer** `[moderate]` — `a.py:11` — boom\n' > "$RPV/passes/adv-p2.md"
+"$DIR/append-usage-log.sh" "$RPV" >/dev/null
+cat > "$RPV/findings-snapshot.json" <<'JSON'
+{"project":"x","mode":"full","multiball":2,"findings":[],"within_persona_runs":{"adv":[[{"severity":"critical","title":"WRONG","file":"a.py","line":"10","rid":null,"model":null}],[{"severity":"critical","title":"WRONG2","file":"a.py","line":"11","rid":null,"model":null}]]}}
+JSON
+rc=0; "$DIR/check-run-complete.py" "$RPV" >/dev/null 2>&1 || rc=$?; rc_is $rc 1 "provenance mismatch (stored != recompute) rejected"
+ferr="$("$DIR/check-run-complete.py" "$RPV" 2>&1 || true)"; has "provenance" "$ferr" "failure names provenance"
+# now write the real field via assemble-wpr -> provenance passes
+"$DIR/assemble-wpr.py" "$RPV" >/dev/null 2>&1 || true
+rc=0; "$DIR/check-run-complete.py" "$RPV" >/dev/null 2>&1 || rc=$?; rc_is $rc 0 "provenance passes after assemble-wpr writes the field"
+
+# ADR-12: incomplete-passes — a persona missing a pass under N (provenance still matches).
+RIC="$ANGEL_RUNS_ROOT/r_incpass"; mk_usage "$RIC" 50000; echo stub > "$RIC/findings/adv.md"; printf '2\n' > "$RIC/MULTIBALL"
+mkdir -p "$RIC/passes"
+printf '#### Minor\n- **alpha bug** `[trivial]` — `x.py:1` — y\n' > "$RIC/passes/hyper-p1.md"
+printf '#### Minor\n- **alpha bug** `[trivial]` — `x.py:2` — y\n' > "$RIC/passes/hyper-p2.md"
+printf '#### Minor\n- **beta bug** `[trivial]` — `z.py:1` — y\n' > "$RIC/passes/adv-p1.md"   # adv-p2 MISSING
+"$DIR/append-usage-log.sh" "$RIC" >/dev/null
+printf '{"project":"x","mode":"full","multiball":2,"findings":[]}\n' > "$RIC/findings-snapshot.json"
+"$DIR/assemble-wpr.py" "$RIC" >/dev/null 2>&1 || true
+rc=0; "$DIR/check-run-complete.py" "$RIC" >/dev/null 2>&1 || rc=$?; rc_is $rc 1 "incomplete passes (adv missing p2, hyper complete) rejected"
+ferr="$("$DIR/check-run-complete.py" "$RIC" 2>&1 || true)"; has "incomplete" "$ferr" "failure names incomplete passes"
+
 echo "== record-dispatch =="
 RRD="$ANGEL_RUNS_ROOT/r_rd"; mkdir -p "$RRD"
 rdl="$(printf '## Findings\n- one\n' | "$DIR/record-dispatch.sh" --findings "$RRD" persona rtfm claude-sonnet-4-6 50000 10 60000)"
@@ -438,13 +473,51 @@ has '"reader_pack":true' "$rdr" "--reader-pack sets reader_pack:true"
 rc=0; "$DIR/record-dispatch.sh" "$RRD" persona '../evil' m null null null </dev/null >/dev/null 2>&1 || rc=$?
 rc_is $rc 1 "path-traversal persona name rejected (f34)"
 rc=0; "$DIR/record-dispatch.sh" "$RRD" persona 'Bad Name' m null null null </dev/null >/dev/null 2>&1 || rc=$?
-rc_is $rc 1 "non-[a-z0-9_-] persona name rejected"
+rc_is $rc 1 "non-[A-Za-z0-9_-] persona name rejected"
 rc=0; "$DIR/record-dispatch.sh" "$RRD" bogus rtfm m null null null </dev/null >/dev/null 2>&1 || rc=$?
 rc_is $rc 1 "unknown phase rejected"
 rdv="$("$DIR/record-dispatch.sh" "$RRD" verifier f3 claude-sonnet-4-6 7000 3 30000 </dev/null)"
 has '"phase":"verifier"' "$rdv" "verifier phase accepted (verification stage)"
 rc=0; "$DIR/record-dispatch.sh" "$RRD" persona rtfm m 12x3 null null </dev/null >/dev/null 2>&1 || rc=$?
 rc_is $rc 1 "non-integer token count rejected"
+
+# --- ADR-12: --pass / --failed / --verdict / multiball guard ---
+RRD2="$ANGEL_RUNS_ROOT/r_rd2"; mkdir -p "$RRD2"
+printf '#### Critical (blocks ship)\n- **race in writer** `[moderate]` — `a.py:10` — boom\n' \
+  | "$DIR/record-dispatch.sh" --findings --pass 1 "$RRD2" persona adv claude-sonnet-5 100 1 100 >/dev/null
+[ -f "$RRD2/passes/adv-p1.md" ] && ok "--pass 1 writes passes/adv-p1.md" || bad "--pass 1 writes passes/adv-p1.md"
+grep -q 'angel-pass persona=adv pass=1 model=claude-sonnet-5' "$RRD2/passes/adv-p1.md" \
+  && ok "--pass stamps the model header (D3)" || bad "--pass stamps the model header (D3)"
+[ -f "$RRD2/findings/adv.md" ] && ok "--pass 1 --findings also writes findings/adv.md" || bad "--pass 1 --findings also writes findings/adv.md"
+printf '#### Minor\n- **nit** `[trivial]` — `b.py:2` — x\n' \
+  | "$DIR/record-dispatch.sh" --pass 2 "$RRD2" persona adv claude-sonnet-5 null null null >/dev/null
+[ -f "$RRD2/passes/adv-p2.md" ] && ok "--pass 2 writes passes/adv-p2.md" || bad "--pass 2 writes passes/adv-p2.md"
+# capture-time rejection of a no-structure block
+rc=0; printf 'this is just prose with no finding structure at all\n' \
+  | "$DIR/record-dispatch.sh" --pass 1 "$RRD2" persona naive m null null null >/dev/null 2>&1 || rc=$?
+rc_is $rc 2 "no-structure pass block rejected (exit 2)"
+[ -f "$RRD2/passes/naive-p1.md.rejected" ] && ok "rejected pass -> .rejected sidecar" || bad "rejected pass -> .rejected sidecar"
+[ ! -f "$RRD2/passes/naive-p1.md" ] && ok "rejected pass NOT written as canonical" || bad "rejected pass NOT written as canonical"
+# --failed excused stub
+"$DIR/record-dispatch.sh" --failed --pass 3 "$RRD2" persona adv m null null null timeout >/dev/null
+grep -q 'failed' "$RRD2/passes/adv-p3.md" && ok "--failed writes an excused failure stub" || bad "--failed writes an excused failure stub"
+# --findings only composes with --pass 1
+rc=0; printf 'x\n' | "$DIR/record-dispatch.sh" --findings --pass 2 "$RRD2" persona adv m null null null >/dev/null 2>&1 || rc=$?
+rc_is $rc 1 "--findings with --pass 2 rejected"
+# multiball guard
+RRDMB="$ANGEL_RUNS_ROOT/r_rd_mb"; mkdir -p "$RRDMB"; printf '2\n' > "$RRDMB/MULTIBALL"
+rc=0; "$DIR/record-dispatch.sh" "$RRDMB" persona adv m null null null </dev/null >/dev/null 2>&1 || rc=$?
+rc_is $rc 1 "multiball persona dispatch without --pass rejected"
+rc=0; printf '#### Minor\n- **x** `[trivial]` — `a.py:1` — y\n' \
+  | "$DIR/record-dispatch.sh" --pass 1 "$RRDMB" persona adv m null null null >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "multiball persona dispatch with --pass accepted"
+rc=0; "$DIR/record-dispatch.sh" "$RRDMB" integrator integrator m null null null </dev/null >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "non-persona phase exempt from the multiball --pass guard"
+# --verdict folds the verifier hand-write into the chokepoint
+printf '{"id":"C1","verdict":"CONFIRMED"}' | "$DIR/record-dispatch.sh" --verdict "$RRD2" verifier C1 m 100 1 100 >/dev/null
+[ -f "$RRD2/verification/C1.json" ] && ok "--verdict writes verification/C1.json (mixed-case id)" || bad "--verdict writes verification/C1.json (mixed-case id)"
+rc=0; printf 'not json' | "$DIR/record-dispatch.sh" --verdict "$RRD2" verifier C2 m null null null >/dev/null 2>&1 || rc=$?
+rc_is $rc 1 "--verdict rejects a non-JSON payload"
 
 echo "== init-run.sh =="
 SYNTH_PROJ="$TMP/proj"; mkdir -p "$SYNTH_PROJ"
@@ -906,6 +979,21 @@ echo
 echo "--- subsample-analyzer + shared matcher suite (test_subsample.py) ---"
 rc=0; python3 "$DIR/test_subsample.py" || rc=$?
 rc_is $rc 0 "subsample-analyzer + finding_match suite passes"
+
+echo
+echo "--- cross-persona overlap suite (test_persona_overlap.py) ---"
+rc=0; python3 "$DIR/test_persona_overlap.py" || rc=$?
+rc_is $rc 0 "persona-overlap suite passes"
+
+echo
+echo "--- md->struct parser suite (test_parse_findings.py) ---"
+rc=0; python3 "$DIR/test_parse_findings.py" || rc=$?
+rc_is $rc 0 "parse-findings suite passes"
+
+echo
+echo "--- within_persona_runs assembler suite (test_assemble_wpr.py) ---"
+rc=0; python3 "$DIR/test_assemble_wpr.py" || rc=$?
+rc_is $rc 0 "assemble-wpr suite passes"
 
 echo
 echo "$PASS passed, $FAIL failed"

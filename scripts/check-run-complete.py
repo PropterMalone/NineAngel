@@ -77,21 +77,69 @@ def within_persona_runs_ok(snap):
     wpr = snap.get("within_persona_runs")
     if not isinstance(wpr, dict) or not wpr:
         return False
-    # Each persona maps to a list of per-pass sub-arrays, and each pass must
-    # itself be a list of findings — NOT a prose string. The 2026-06-19 failure
-    # shape was prose `consensus` strings; reject anything that isn't the
-    # structured per-pass record so a stringly-typed record can't masquerade as
-    # one. (Empty sub-arrays like [[],[]] ARE valid — an all-clean multiball
-    # run that genuinely found nothing in either pass.)
+    # Each persona maps to a list of per-pass sub-arrays, each pass a list of
+    # finding OBJECTS — not prose strings and not id-ref strings. The 2026-06-19
+    # failure was prose `consensus` strings; the 2026-07 inline failures were
+    # reconciled id-refs (`["f1","f2"]`). This ELEMENT-level check (each finding
+    # is a dict) is version-independent (ADR-12): it rejects both broken shapes on
+    # `--all` audits of pre-v3 history, where the old pass-is-a-list check let
+    # id-ref strings through. (Empty sub-arrays like [[],[]] ARE valid — an
+    # all-clean multiball run that genuinely found nothing.)
     for passes in wpr.values():
         if not isinstance(passes, list):
             return False
-        if not all(isinstance(p, list) for p in passes):
-            return False
+        for p in passes:
+            if not isinstance(p, list) or not all(isinstance(f, dict) for f in p):
+                return False
     # At least one persona must record >=2 passes (proof multiball ran). We
     # don't require ALL personas to be >=2: single-persona multiball leaves the
     # others at 1 pass, and the per-persona N isn't carried here.
     return any(len(passes) >= 2 for passes in wpr.values())
+
+
+_PASS_IDX_RE = re.compile(r"[-_](?:p|pass)(\d+)\.md$", re.IGNORECASE)
+
+
+def provenance_check(run_dir):
+    """ADR-12 provenance gate: does the stored within_persona_runs equal a fresh
+    recompute from passes/*.md? Delegates to assemble-wpr. A parse/import failure is
+    a distinct `provenance-uncomputable` result (never aborts finalize — the review's
+    'a parser bug silently drops a valid run' finding). Returns (ok, reason)."""
+    try:
+        import importlib.util
+        p = Path(__file__).resolve().parent / "assemble-wpr.py"
+        spec = importlib.util.spec_from_file_location("assemble_wpr", p)
+        aw = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(aw)
+        return aw.check(str(run_dir))
+    except Exception as e:  # noqa: BLE001 — a broken parser must not crash the gate
+        return False, f"provenance-uncomputable: {e.__class__.__name__}: {e}"
+
+
+def incomplete_passes(run_dir, snap, n):
+    """For each persona in within_persona_runs, list pass indices 1..N missing from
+    passes/ on disk (a missed --pass call). A --failed stub counts as present. Catches
+    the gap the provenance check can't (both stored + recompute see the same missing
+    pass, so they'd still match)."""
+    pdir = run_dir / "passes"
+    if not pdir.is_dir():
+        return ""
+    wpr = (snap or {}).get("within_persona_runs") or {}
+    bad = []
+    for persona in wpr:
+        present = set()
+        for f in pdir.glob(f"{persona}[-_]p*.md"):
+            m = _PASS_IDX_RE.search(f.name)
+            if m:
+                present.add(int(m.group(1)))
+        for f in pdir.glob(f"{persona}[-_]pass*.md"):
+            m = _PASS_IDX_RE.search(f.name)
+            if m:
+                present.add(int(m.group(1)))
+        missing_idx = [i for i in range(1, n + 1) if i not in present]
+        if missing_idx:
+            bad.append(f"{persona}:{missing_idx}")
+    return ", ".join(bad)
 
 
 def usage_log_path():
@@ -136,8 +184,21 @@ def check(run_dir, logged):
         except Exception:
             snap = None
         n = multiball_n(run_dir, snap)
-        if n and not within_persona_runs_ok(snap):
-            missing.append(f"within_persona_runs (multiball N={n})")
+        if n:
+            if not within_persona_runs_ok(snap):
+                missing.append(f"within_persona_runs (multiball N={n})")
+            else:
+                # Mechanical-capture (v3) runs have passes/ on disk -> provenance +
+                # pass-completeness. Legacy LLM-assembled runs (no passes/) get only the
+                # structural check above (version-independent, per ADR-12 back-compat).
+                pdir = run_dir / "passes"
+                if pdir.is_dir() and any(pdir.glob("*p*.md")):
+                    ok, reason = provenance_check(run_dir)
+                    if not ok:
+                        missing.append(f"within_persona_runs provenance ({reason})")
+                    gap = incomplete_passes(run_dir, snap, n)
+                    if gap:
+                        missing.append(f"passes incomplete (N={n}: {gap})")
     return missing
 
 
