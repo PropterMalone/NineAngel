@@ -199,6 +199,34 @@ nf="$(printf '%s' "$lineP" | awk -F'|' '{print NF}')"
 has "we ird" "$lineP" "pipe in project replaced with space"
 has "rt fm" "$lineP" "pipe in persona name replaced with space"
 
+# Regression: a re-finalize must SUPERSEDE its earlier line, not append a second.
+# finalize-run.sh appends before check-run-complete.py runs, so re-finalizing after
+# the gate fails used to write a duplicate. 14 runs back to 2026-06-01 were affected;
+# 9 carried a premature 0C/0I/0M/0N alongside their real counts, and one ratcheted
+# across four appends (0C/0I -> 15C/25I -> 18C/34I -> 19C/34I). Cross-run precision
+# mining read that as "found nothing." (2026-08-02)
+RDUP="$ANGEL_RUNS_ROOT/r_dup"; mkdir -p "$RDUP/findings"
+mk_dup_usage() { # $1=critical $2=important
+  cat > "$RDUP/usage.json" <<JSON
+{"run_dir":"$RDUP","project":"dupdemo","mode":"diff","reader_enabled":false,
+ "started_at":"2026-08-02T12:00:00Z","ended_at":"2026-08-02T12:05:00Z",
+ "totals":{"total_tokens":1000,"wall_seconds":10,
+   "personas":[{"name":"naive","model":"claude-sonnet-4-6","total_tokens":1000,"reader_pack":false}]},
+ "unmeasured":[],"verdict":"CHANGES REQUIRED","findings":{"critical":$1,"important":$2,"minor":0,"noted":0}}
+JSON
+}
+before_n="$(grep -c . "$ANGEL_USAGE_LOG" 2>/dev/null || echo 0)"
+mk_dup_usage 0 0;  "$DIR/append-usage-log.sh" "$RDUP" >/dev/null 2>&1   # premature finalize
+mk_dup_usage 2 10; "$DIR/append-usage-log.sh" "$RDUP" >/dev/null 2>&1   # re-finalize, complete
+dup_lines="$(grep -c "run:$RDUP\$\|run:$RDUP " "$ANGEL_USAGE_LOG" || true)"
+[ "$dup_lines" = 1 ] && ok "re-finalize supersedes (one line per run)" \
+  || bad "re-finalize supersedes (one line per run)" "got $dup_lines lines for $RDUP"
+dup_line="$(grep "run:$RDUP\$\|run:$RDUP " "$ANGEL_USAGE_LOG" | tail -1)"
+has "2C/10I/0M/0N" "$dup_line" "later (complete) counts win over premature 0C/0I"
+after_n="$(grep -c . "$ANGEL_USAGE_LOG")"
+[ "$((after_n - before_n))" = 1 ] && ok "supersede leaves other runs' lines intact" \
+  || bad "supersede leaves other runs' lines intact" "log grew by $((after_n - before_n)), expected 1"
+
 echo "== record-disposition.py =="
 rc=0; "$DIR/record-disposition.py" "$RD" f1 accepted >/dev/null || rc=$?; rc_is $rc 0 "record accepted ok"
 rc=0; "$DIR/record-disposition.py" "$RD" f4 rejected-wrong not a real bug at all >/dev/null || rc=$?; rc_is $rc 0 "record rejected-wrong ok"
@@ -649,6 +677,45 @@ rc=0; ferr="$("$DIR/finalize-run.sh" "$RBAD" 2>&1 >/dev/null)" || rc=$?
 [ "$rc" -ne 0 ] && ok "finalize-run exits nonzero on incomplete fixture" || bad "finalize-run exits nonzero on incomplete fixture"
 has "check-run-complete" "$ferr" "finalize-run stderr names the failing stage"
 
+# ADR-12 stage order. The append must come AFTER the gate: appending first meant a gate
+# failure produced a DUPLICATE log line instead of stopping one (14 runs, 2026-06-01
+# onward). A gate-failed run must leave no trace in the calibration index. (2026-08-02)
+hasnt "run:$RBAD" "$(cat "$ANGEL_USAGE_LOG")" "gate failure writes NO usage.log line"
+has "usage.log line NOT written" "$ferr" "gate failure explains the suppressed append"
+
+# The gate must not require the very line it gates. check-run-complete counts a
+# usage.log run: line as a completeness artifact, which is circular once the append moves
+# after the gate — --pre-append drops that one requirement and nothing else.
+RPA="$ANGEL_RUNS_ROOT/r_preappend"; mkdir -p "$RPA/findings"; mk_snapshot "$RPA"
+mk_usage "$RPA" 50000; echo stub > "$RPA/findings/adv.md"
+rc=0; python3 "$DIR/check-run-complete.py" --pre-append "$RPA" >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "--pre-append passes a run absent from usage.log"
+rc=0; python3 "$DIR/check-run-complete.py" "$RPA" >/dev/null 2>&1 || rc=$?
+rc_is $rc 1 "without --pre-append the same run is INCOMPLETE (usage.log line still required)"
+
+# assemble-wpr.py is finalize stage 1 — the producer the provenance gate was always
+# enforcing against. It shipped unwired: nothing called it in production for six weeks,
+# so the integrator kept hand-writing within_persona_runs and every multiball run failed
+# provenance. Pin that finalize actually runs it.
+RWP="$ANGEL_RUNS_ROOT/r_wpr_stage1"; mkdir -p "$RWP/findings" "$RWP/passes"; mk_snapshot "$RWP"
+mk_usage "$RWP" 50000; echo stub > "$RWP/findings/adv.md"
+python3 - "$RWP" <<'PY'
+import json, sys
+p = sys.argv[1] + "/findings-snapshot.json"
+s = json.load(open(p))
+s["within_persona_runs"] = {"adv": [[{"severity": "critical", "title": "LLM WROTE THIS", "file": "x.ts", "line": 1}]]}
+json.dump(s, open(p, "w"))
+PY
+"$DIR/finalize-run.sh" "$RWP" >/dev/null 2>&1 || true
+rc=0; python3 - "$RWP" <<'PY' || rc=$?
+import json, sys
+s = json.load(open(sys.argv[1] + "/findings-snapshot.json"))
+w = s.get("within_persona_runs")
+titles = [f.get("title") for passes in (w or {}).values() for p in passes for f in p]
+assert "LLM WROTE THIS" not in titles, f"assemble-wpr did not overwrite the LLM-written field: {w}"
+PY
+rc_is $rc 0 "finalize stage 1 overwrites an LLM-written within_persona_runs"
+
 echo "== emit-dispositions-skeleton.py =="
 SKROOT="$TMP/skelruns"; mkdir -p "$SKROOT"
 SK="$SKROOT/r_skel"; mkdir -p "$SK/findings"; mk_snapshot "$SK"
@@ -836,6 +903,26 @@ assert [e["id"] for e in s["verify_queue"]] == ["f1", "f2"], s["verify_queue"] #
 print("av-asserts-ok")
 PY
 rc_is $rc 0 "verdicts patched into snapshot; verdict-less finding stays null"
+
+# severity_opinion (2026-08-09): written when the verdict carries it, omitted
+# entirely when it does not -- a null on every historical record would make
+# "no opinion" and "opinion absent" indistinguishable to mine-runs.py.
+rc=0; python3 - <<'PY' || rc=$?
+import importlib.util, pathlib
+d = pathlib.Path(__file__).resolve().parent if "__file__" in dir() else pathlib.Path(".")
+spec = importlib.util.spec_from_file_location("av", "scripts/apply-verification.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+a = [{"id": "f1"}]
+m.patch_findings(a, {"f1": {"verdict": "CONFIRMED", "method": "ran", "evidence": "e",
+                            "severity_opinion": "too-high"}})
+assert a[0]["verification"]["severity_opinion"] == "too-high", a
+b = [{"id": "f1"}]
+m.patch_findings(b, {"f1": {"verdict": "CONFIRMED", "method": "ran", "evidence": "e"}})
+assert "severity_opinion" not in b[0]["verification"], b
+print("sev-op-asserts-ok")
+PY
+rc_is $rc 0 "severity_opinion written when present, omitted when absent"
+
 sm="$(cat "$AV/verification-summary.md")"
 has "## Verification" "$sm" "summary has section heading"
 has "REFUTED:**" "$sm" "bold warning line above REFUTED items"
@@ -989,6 +1076,11 @@ echo
 echo "--- md->struct parser suite (test_parse_findings.py) ---"
 rc=0; python3 "$DIR/test_parse_findings.py" || rc=$?
 rc_is $rc 0 "parse-findings suite passes"
+
+echo
+echo "--- mine-runs fp accounting suite (test_mine_runs_fp.py) ---"
+rc=0; python3 "$DIR/test_mine_runs_fp.py" || rc=$?
+rc_is $rc 0 "mine-runs fp suite passes"
 
 echo
 echo "--- within_persona_runs assembler suite (test_assemble_wpr.py) ---"

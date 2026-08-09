@@ -164,7 +164,19 @@ def logged_run_dirs():
         return set()
 
 
-def check(run_dir, logged):
+def check(run_dir, logged, pre_append=False):
+    """pre_append=True skips the usage.log requirement.
+
+    ADR-12 moved append-usage-log AFTER this gate so a gate failure stops the line
+    instead of duplicating it. That makes the usage.log check circular when this runs
+    as finalize-run.sh's pre-append gate: the line it demands is only written once the
+    gate passes, so a first finalize could never succeed. The edit map didn't catch
+    this — the check made sense only while the append ran first.
+
+    So the artifact is still required for an `--all` audit (there, a run genuinely
+    should be in the index), and skipped when we're the thing deciding whether to
+    write it.
+    """
     missing = []
     if not (run_dir / "findings-snapshot.json").is_file():
         missing.append("findings-snapshot.json")
@@ -173,7 +185,7 @@ def check(run_dir, logged):
     fdir = run_dir / "findings"
     if not (fdir.is_dir() and any(fdir.glob("*.md"))):
         missing.append("findings/*.md")
-    if str(run_dir) not in logged:
+    if not pre_append and str(run_dir) not in logged:
         missing.append("usage.log run: line")
     # Multiball runs must persist the per-pass record — without it the run is
     # unmeasurable (subsample-analyzer/backstop read `within_persona_runs`).
@@ -207,6 +219,8 @@ def main():
     ap.add_argument("run_dir", nargs="?")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--runs-dir", default=str(Path.home() / ".angel" / "runs"))
+    ap.add_argument("--pre-append", action="store_true",
+                    help="skip the usage.log requirement; for finalize-run.sh's pre-append gate (ADR-12)")
     args = ap.parse_args()
 
     logged = logged_run_dirs()
@@ -232,7 +246,7 @@ def main():
     rd = Path(args.run_dir)
     if not rd.is_dir():
         sys.exit(f"run dir not found: {rd}")
-    miss = check(rd, logged)
+    miss = check(rd, logged, pre_append=args.pre_append)
     if miss:
         print(f"INCOMPLETE: {rd}\n  missing: {', '.join(miss)}", file=sys.stderr)
         sys.exit(1)

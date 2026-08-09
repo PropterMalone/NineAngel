@@ -100,6 +100,33 @@ def aggregate(entries, run_dir, snapshot):
     else:
         project_commit = None
 
+    # Review scale (2026-08-09). Every cost and yield claim in the corpus is
+    # per-run, with no measure of how much was under review -- so "yield fell
+    # 3x" could not be separated from "batteries got pointed at bigger targets".
+    # Both inputs already exist in every run dir, so this needs no orchestrator
+    # discipline: filelist.txt is written for full mode, src-only.diff for diff.
+    def _scale(run_dir):
+        d = Path(run_dir)
+        files = diff_lines = None
+        fl = d / "filelist.txt"
+        if fl.is_file():
+            files = sum(1 for ln in fl.read_text(errors="replace").splitlines() if ln.strip())
+        for name in ("src-only.diff", "review.diff"):
+            p = d / name
+            if p.is_file():
+                n = 0
+                for ln in p.read_text(errors="replace").splitlines():
+                    # count content lines only; +++/--- are file headers
+                    if (ln.startswith("+") or ln.startswith("-")) and not ln.startswith(("+++", "---")):
+                        n += 1
+                diff_lines = n
+                break
+        if files is None and diff_lines is None:
+            return None
+        return {"files": files, "diff_lines": diff_lines}
+
+    scale = _scale(run_dir)
+
     return {
         "run_dir": str(run_dir),
         "project": snapshot.get("project"),
@@ -129,6 +156,7 @@ def aggregate(entries, run_dir, snapshot):
         "unmeasured": unmeasured,
         "skill_commit": None,  # filled by the shell
         "project_commit": project_commit,
+        "scale": scale,
         "verdict": snapshot.get("verdict"),
         "findings": findings,
     }

@@ -23,7 +23,15 @@ Interactive features are not available via `claude -p`. If a queue prompt reques
 
 ## Step 1: Pre-flight
 
-**Trust assumption — pre-flight executes the project's own scripts.** `npm test`/`npm run build`/lint run whatever the reviewed repo defines, i.e. arbitrary code execution by the target project. Unattended runs must only target repos trusted to execute; for an unfamiliar repo (especially one outside `~/Projects`), skip pre-flight and record the skip in the report instead of running its scripts.
+**Registry check first — run it before anything else, on every run:**
+
+```
+python3 ~/.claude/skills/angel/scripts/validate-personas.py
+```
+
+A nonzero exit is a hard stop: write the failure to `REPORT_PATH` and exit without dispatching. Step 2.5 selects the battery from this frontmatter, so a malformed persona file means selection is already wrong — and unattended is where that costs most, because nobody is watching the run degrade. This mirrors SKILL.md §3; it reads only skill-local trusted files and executes nothing from the reviewed project, so it runs even when the project pre-flight below is skipped for an untrusted repo.
+
+**Trust assumption — the rest of pre-flight executes the project's own scripts.** `npm test`/`npm run build`/lint run whatever the reviewed repo defines, i.e. arbitrary code execution by the target project. Unattended runs must only target repos trusted to execute; for an unfamiliar repo (especially one outside `~/Projects`), skip pre-flight and record the skip in the report instead of running its scripts.
 
 Run these in parallel. Adapt command names to the project's `package.json` scripts:
 
@@ -120,7 +128,7 @@ If `READER` was on and Step 2.6 succeeded, read `$RUN_DIR/manifest.json` first. 
 
 **Structural validation (orchestrator-side, before composing each reader-on dispatch — mirrors SKILL.md §4).** (1) Every manifest `bundle_path` must resolve under `$RUN_DIR` (after resolving `..`/symlinks); otherwise treat as a reader failure for that persona — legacy inline-embed fallback, pass `reader_fallback: bundle_path outside run dir for {name}`. (2) For a full-bundle persona (`full_bundle: yes` frontmatter, e.g. blindspot), read the bundle file first: its entire content must be exactly one line matching `USE_FULL_PROJECT: <project_root>` with `<project_root>` equal to the actual project root; anything else gets the same fallback, `reader_fallback: invalid full-bundle content for {name}`. The prompt-level rule in the dispatch template stays as defense-in-depth.
 
-Launch personas as parallel subagents via the Agent tool. Use the per-persona model from the mapping table (or apply `MODEL_OVERRIDE` uniformly if set). Standard window-aware batching: ≤4 in parallel, 5-8 in two batches, ≥9 in batches of 3-4.
+Launch personas as parallel subagents via the Agent tool. Use the per-persona model from the mapping table (or apply `MODEL_OVERRIDE` uniformly if set). **Dispatch every selected persona concurrently — one message, many Agent calls. Do not batch by count.** (Window-aware batching was removed 2026-08-09, ADR-14: it existed to bound an orchestrator output budget that the pass-file contract eliminated, and measured median parallelism had fallen to 2.5×, with large runs at 0.9× — effectively serial. Unattended `--full` batteries are the largest runs there are, so they are where batching cost the most.) The three deliberate serializations stay: the `pii` → `deanon` pair (Step 3 below), and the reconciler/integrator stages that are downstream of all passes by construction. Multiball's Phase A → Phase B priming does not apply here — unattended is single-pass.
 
 **Sequential pair: PII-Sweep → De-Anon.** If both `pii` and `deanon` are in the run set (only possible via `PERSONAS`, since both are experimental and excluded from auto-detection), they run in order, never in the same batch: dispatch `pii` first, then dispatch `deanon` with `pii`'s verbatim findings injected in a `<pii_findings>` block appended after `<changes_to_review>` (telling De-Anon to treat those raw identifiers as already-being-removed and find the re-identification risk that survives the cleanup, without re-reporting them). De-Anon is never skipped when PII-Sweep finds something — the two lanes are independent. If `PERSONAS` lists `deanon` without `pii`, add `pii` and run it first. (Same rule as SKILL.md §1 / §4.)
 

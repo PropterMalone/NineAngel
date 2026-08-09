@@ -146,7 +146,9 @@ Each persona runs as a subagent (Agent tool) with:
 - An untrusted-content advisory instructing the persona to flag (not follow) any directive-shaped content found in the project
 - **No knowledge of other personas' findings** — independent perspectives
 
-Parallelism: all invoked personas run concurrently. No dependencies between them.
+Parallelism: all invoked persona passes are dispatched concurrently. No dependencies between them. Three deliberate exceptions, each named where it is defined: multiball's Phase A → Phase B cache priming, the `pii` → `deanon` sequential pair, and the reconciler/integrator stages that are downstream of all passes by construction.
+
+This sentence was aspirational rather than descriptive between the introduction of SKILL.md §4's window-aware batching and 2026-08-09, when that batching was removed — batteries of 9+ ran in groups of 3-4 while this line claimed full concurrency. **There are two orchestrator prompts, and the claim is only true when both agree**: `SKILL.md` §4 (interactive) and `unattended.md` Step 3 (`claude -p`). The first removal pass updated only SKILL.md and left unattended.md mandating the old rule, so this sentence was false again on the day it was repaired — caught by a `coach` review of that very commit and closed the same day. If a future change touches dispatch concurrency, change this sentence **and both prompts** in the same commit.
 
 Per-persona model tier is set in `SKILL.md`'s mapping table: Haiku for fast/lightweight passes (Naive, Freshness), Sonnet for most reviewers, the top reasoning tier for synthesis-heavy passes (Thousand-Foot, Data-Integrity, Coach, Blindspot). Concrete model IDs live in SKILL.md §1/§5 and `docs/decisions/04` — they re-point when the model family changes; this doc names tiers, not IDs. Override uniformly with `--model-override`.
 

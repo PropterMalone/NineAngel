@@ -7,7 +7,8 @@ per-finding `"verification": null`), the orchestrator dispatches verifier
 subagents and writes each verdict to $RUN_DIR/verification/{finding_id}.json:
 
   {"id":"f3","verdict":"CONFIRMED|PLAUSIBLE|REFUTED","method":"ran|traced",
-   "evidence":"<=300 chars why","note":"optional"}
+   "evidence":"<=300 chars why","severity_opinion":"agree|too-high|too-low",
+   "note":"optional"}
 
 This script applies them: patches each matching finding's `verification`
 field, emits $RUN_DIR/verification-summary.md (REFUTED first), and replaces-
@@ -50,6 +51,12 @@ def patch_findings(findings, verdicts_by_id):
         v = verdicts_by_id.get(f.get("id"))
         if v:
             f["verification"] = {k: v.get(k) for k in ("verdict", "method", "evidence")}
+            # severity_opinion rides along so severity accuracy is computable from
+            # the snapshot alone. Written ONLY when the verdict carries it: a
+            # `severity_opinion: null` on every historical-shaped record would make
+            # "no opinion" and "opinion absent" indistinguishable downstream.
+            if v.get("severity_opinion"):
+                f["verification"]["severity_opinion"] = v["severity_opinion"]
     return [fid for fid in verdicts_by_id if fid not in known]
 
 

@@ -80,11 +80,60 @@ if [[ "$PHASE" == "persona" && -f "$RUN_DIR/MULTIBALL" && -z "$PASS_I" ]]; then
 fi
 
 # Capture STDIN once for whichever consumer needs it.
+#
+# BOUNDED. `$(cat)` on an fd that never closes blocks FOREVER, and in this harness that
+# is the default rather than the exception: a call made with no redirect inherits the
+# orchestrator's socket, which carries no data and is never closed. Measured 2026-07-31 —
+# a `--pass 1` call from the 07-29 run had been wedged for 42.8 HOURS, holding its
+# bash -c parent in do_wait, and that run never produced a report.
+#
+# The empty-STDIN guard below cannot catch this: it runs AFTER the substitution returns,
+# and the substitution never returns. Two failure modes, one line:
+#   </dev/null      -> instant EOF -> truncated pass file  (guarded below, since b022c90)
+#   no redirect     -> socket that never closes -> hangs forever  (guarded HERE)
+# A timeout turns a silent multi-day stall into an immediate, self-describing error.
+STDIN_TIMEOUT="${ANGEL_STDIN_TIMEOUT:-15}"
+STDIN_CAPTURE=""
+# Assigns STDIN_CAPTURE and exits on timeout. Called as a PLAIN COMMAND, never inside
+# `$( )` — a function body in a command substitution runs in a subshell, so its `exit`
+# would kill only that subshell and the script would sail on with an empty block.
+capture_stdin() {
+  local rc=0
+  # `timeout` returns 124 on expiry. Whatever arrived first is discarded deliberately:
+  # a partial block is worse than none, because this script TRUNCATES on write.
+  #
+  # `|| rc=$?` is load-bearing: `set -e` is on (line 34), so a bare assignment from a
+  # failing substitution kills the script with 124 BEFORE the check below and the
+  # operator gets a bare exit code with no explanation. Verified by test.
+  STDIN_CAPTURE="$(timeout "$STDIN_TIMEOUT" cat)" || rc=$?
+  if [[ $rc -eq 124 ]]; then
+    echo "error: STDIN never closed after ${STDIN_TIMEOUT}s — refusing to hang." >&2
+    echo "       This call READS the block from stdin. Called with no redirect it" >&2
+    echo "       inherits a socket that never closes and blocks forever — that wedged" >&2
+    echo "       a run for 42h on 2026-07-29, and the run never produced a report." >&2
+    echo "       Pipe the block in: record-dispatch.sh ... <<'EOF' ... EOF" >&2
+    echo "       Or use --failed for a dead dispatch. Do NOT add </dev/null — see below." >&2
+    exit 3
+  fi
+}
 BLOCK=""; VERDICT_JSON=""
 if $VERDICT; then
-  VERDICT_JSON="$(cat)"
+  capture_stdin; VERDICT_JSON="$STDIN_CAPTURE"
 elif { [[ -n "$PASS_I" ]] && ! $FAILED; } || $FINDINGS; then
-  BLOCK="$(cat)"
+  capture_stdin; BLOCK="$STDIN_CAPTURE"
+  # An EMPTY block is never legitimate here: --pass and --findings both exist to
+  # PERSIST the reviewer's output, and this script TRUNCATES the target file on
+  # write. Redirecting </dev/null to stop the script blocking on a tty has twice
+  # destroyed a whole run's pass files immediately after they were written
+  # (2026-07-31 a private target: 16 of 30 unrecoverable). Refuse instead of writing a stub
+  # over real content. To record a pass that genuinely produced nothing, pipe the
+  # persona's "No findings." block in; to record a dead dispatch, use --failed.
+  if [[ -z "${BLOCK//[[:space:]]/}" ]]; then
+    echo "error: empty STDIN with --pass/--findings — refusing to overwrite ${NAME}'s block." >&2
+    echo "       Pipe the findings block in (record-dispatch.sh ... <<'EOF' ... EOF), or use --failed for a dead dispatch." >&2
+    echo "       Do NOT pass </dev/null: this call WRITES the pass file, it does not merely log usage." >&2
+    exit 2
+  fi
 fi
 
 # Timestamp the dispatch (ADR-11).

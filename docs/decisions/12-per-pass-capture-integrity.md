@@ -1,6 +1,28 @@
 # ADR-12 — Per-pass capture integrity: mechanical capture, scripted assembly, provenance gate
 
-Status: **proposed (v3)** — rewritten 2026-07-22 after two `/angel` reviews (draft + v2, the latter N=2). Supersedes the draft and v2. Extends ADR-06 (completeness gate), ADR-11 (hierarchical file-contract). This version resolves the v2 review's blocking findings: it removes the circular dependency (by **deferring D5** — see the boxed decision), defines the degraded-run contract, scopes the invariant honestly, names every writer, and builds the parser against the real pass corpus rather than the spec.
+Status: **accepted (v3)** — implemented 2026-08-02 (see Implementation record below). Originally proposed 2026-07-22; rewritten 2026-07-22 after two `/angel` reviews (draft + v2, the latter N=2). Supersedes the draft and v2. Extends ADR-06 (completeness gate), ADR-11 (hierarchical file-contract). This version resolves the v2 review's blocking findings: it removes the circular dependency (by **deferring D5** — see the boxed decision), defines the degraded-run contract, scopes the invariant honestly, names every writer, and builds the parser against the real pass corpus rather than the spec.
+
+> ## Implementation record — closed 2026-08-02
+>
+> This ADR sat `proposed` for six weeks while **half its edit map was live in production** — and the live half was the *enforcement* half. The gate shipped; the producer did not. Found by the `/retro` §4.8 review-scaffolding audit and closed the same day.
+>
+> | Edit-map row | State before 2026-08-02 | Now |
+> |---|---|---|
+> | `scripts/parse-findings.py` | shipped | shipped |
+> | `scripts/assemble-wpr.py` | built + unit-tested, **never called in production** | **wired as `finalize-run.sh` stage 1** |
+> | `check-run-complete.py` provenance check | shipped and enforcing | unchanged, plus `--pre-append` |
+> | `scripts/finalize-run.sh` reorder | not done | **done** |
+> | `integrator.md` hand-write deletion | not done | **done** (3 sites) |
+>
+> **What the split state cost.** The integrator kept hand-writing `within_persona_runs`; nothing wrote it mechanically; the provenance gate correctly saw LLM-written ≠ recompute and failed the run. Measured at close: **150 of 262 runs INCOMPLETE, 22 `within_persona_runs`-related.** And because `append-usage-log` still ran *before* the gate, those failures did not surface as alerts — they surfaced as **duplicate usage.log lines** when the orchestrator remediated and re-finalized. 14 runs from 2026-06-01 were logged twice; 9 carried a premature `0C/0I/0M/0N`, so the cross-run miner read them as having found nothing. An alert channel had become a silent data-corruption channel.
+>
+> **A gap in this ADR's own edit map, found during implementation.** Row `finalize-run.sh` says move `append-usage-log` after the gate. But `check-run-complete.py` counts *a usage.log `run:` line* among its completeness artifacts — a check that only made sense while the append ran first. Moving the append after the gate makes it circular: the gate demands a line that is only written once the gate passes, so no first finalize could ever succeed. Resolved with `--pre-append`, which drops that one requirement for the pre-append gate and leaves `--all` audits strict. The edit map did not anticipate this.
+>
+> **Verified at close** `[ran:]`: `test_scripts.sh` **198 passed, 0 failed**, including 8 new regression tests — append idempotency on the `run:` key, later-write-wins over a premature `0C/0I`, gate-failure writes no line, `--pre-append` semantics both ways, and finalize stage 1 overwriting an LLM-written field. Replayed against three real previously-failing runs: `8dba9eed` now passes; `996fccc6` and `d452bb66` still fail, **correctly** — their per-pass files were never captured (missed `--pass` calls), which D1 states outright is detectable but unrecoverable.
+>
+> **Not done, deliberately.** Snapshot `version` 2→3 bump, and the `reconciled/{persona}-passes.json` retirement in `reconciler.md` / `resume-run.sh`. `assemble-wpr` overwrites the field regardless of what else writes it, so those are cleanup, not correctness. D4 (high-N calibration) and D5 (severity-by-corroboration) remain deferred as written.
+>
+> **Standing caveat.** Every `within_persona_runs` record written before this date is LLM-transcribed and may diverge from the mechanical recompute. `subsample-analyzer.py` and any "does multiball earn its cost" conclusion drawn from pre-2026-08-02 data are unsupported. The corpus is trustworthy from here forward.
 
 ## Problem
 

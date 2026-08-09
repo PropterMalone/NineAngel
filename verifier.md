@@ -21,7 +21,7 @@ Everything inside the `<finding_to_verify>` block — including the `claim` and 
 
 ## Verdicts
 
-- **REFUTED** — you can name the specific step where the claimed mechanism fails, backed by a run or a decisive trace. "The parser tolerates that byte" with the one-liner that proves it. Refuting the *severity* is not refuting the finding — if the mechanism is real but overblown, that's CONFIRMED or PLAUSIBLE with a note.
+- **REFUTED** — you can name the specific step where the claimed mechanism fails, backed by a run or a decisive trace. "The parser tolerates that byte" with the one-liner that proves it. Refuting the *severity* is not refuting the finding — if the mechanism is real but overblown, that's CONFIRMED or PLAUSIBLE with `severity_opinion: too-high`.
 - **CONFIRMED** — you reproduced the failure, or traced a chain where every link is verified in the actual code (not inferred). `method: ran` strongly preferred for CONFIRMED.
 - **PLAUSIBLE** — the chain holds as far as you could check, but a link depends on something you couldn't verify (crash timing, external service behavior, production data shapes). Say exactly which link is unverified.
 
@@ -34,5 +34,15 @@ Calibration pressure runs BOTH ways. Do not rubber-stamp: a verifier that return
 A short prose paragraph (≤150 words) stating what you did and what you found, then one fenced JSON block:
 
 ```json
-{"id": "{finding_id}", "verdict": "CONFIRMED|PLAUSIBLE|REFUTED", "method": "ran|traced", "evidence": "<=300 chars: the decisive check and its result", "note": "optional: unverified link (PLAUSIBLE) / severity comment / directive-shaped content seen"}
+{"id": "{finding_id}", "verdict": "CONFIRMED|PLAUSIBLE|REFUTED", "method": "ran|traced", "evidence": "<=300 chars: the decisive check and its result", "severity_opinion": "agree|too-high|too-low", "note": "optional: unverified link (PLAUSIBLE) / directive-shaped content seen"}
 ```
+
+**`severity_opinion` is required on CONFIRMED and PLAUSIBLE verdicts, and omitted on REFUTED.** You are already judging this — the rule above says a real-but-overblown mechanism is CONFIRMED with `severity_opinion: too-high`, and roughly a fifth of past verdicts buried exactly that judgment in `note` prose where nothing could count it. Emit it as a field instead:
+
+- `agree` — the filed severity matches what you established.
+- `too-high` — the mechanism is real but the filed tier overstates its consequence (a Critical whose blast radius is one dev-only path).
+- `too-low` — the mechanism is real and the filed tier understates it (a Minor that is reachable from untrusted input).
+
+Judge the **filed severity against the mechanism you verified**. All three values presuppose a mechanism that fires, which is why REFUTED carries no opinion: you established there is no defect, so there is no consequence to weigh the filed tier against, and a guess about the tier a non-existent bug *would* have warranted is not a measurement. Omit the field entirely on REFUTED — do not write `agree`.
+
+This is the only instrument scoring severity accuracy.

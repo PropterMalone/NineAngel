@@ -120,6 +120,11 @@ def main():
     pfp = defaultdict(int)                        # false positives: human rejected-wrong OR machine REFUTED
     pfp_human = defaultdict(int)                  # human rejected-wrong only
     pfp_machine = defaultdict(int)                # machine REFUTED only
+    # Severity accuracy (2026-08-09): the verifier's structured opinion on whether
+    # the FILED severity matched the mechanism it verified. Independent of verdict.
+    # Absent on pre-2026-08-09 verdicts -> not counted at all, so the denominator
+    # is "verdicts carrying an opinion", never inflated by silence.
+    psev_op = defaultdict(lambda: defaultdict(int))
     runs_with_evidence = 0
     runs_with_disp = 0
 
@@ -193,6 +198,7 @@ def main():
             # distinguished from human rejected-wrong so callers can audit each channel.
             verif = f.get("verification") if isinstance(f, dict) else None
             machine_refuted = (isinstance(verif, dict) and verif.get("verdict") == "REFUTED")
+            sev_op = verif.get("severity_opinion") if isinstance(verif, dict) else None
             for p in ps:
                 pfind[p] += 1
                 psev[p][sev] += 1
@@ -200,14 +206,38 @@ def main():
                     pev[p] += 1
                     if ev in ("cited-spec", "code-site"):
                         pcited[p] += 1
+                # A finding is scored as a false positive AT MOST ONCE, and only
+                # against a denominator it is also counted in. Two defects lived
+                # here until 2026-08-09:
+                #   (1) no elif -- a finding both human `rejected-wrong` AND
+                #       machine REFUTED incremented pfp twice;
+                #   (2) machine REFUTED incremented pfp (numerator) but never
+                #       pdisp (denominator), so fp_rate could exceed 1.0.
+                # Precedence is human-over-machine: run 20260801T143040Z-bb75d4d9
+                # finding f3 was REFUTED by the verifier, then `accepted-mod` and
+                # fixed by a human. That is not a false positive, and the old code
+                # scored it as one against rigor and rtfm.
+                # REFUTED verdicts carry no severity opinion by contract
+                # (verifier.md): all three values presuppose a mechanism that
+                # fires, and there is none. Filter here too rather than trusting
+                # the contract -- REFUTED is ~6.5% of verdicts, and at falsifier
+                # (b)'s 50-verdict threshold that is ~3 opinions, enough to move
+                # both the 90%-agree test and the 2:1 skew test on a
+                # subpopulation where the measurement is meaningless.
+                if sev_op in ("agree", "too-high", "too-low") and not machine_refuted:
+                    psev_op[p][sev_op] += 1
+                if machine_refuted:
+                    pfp_machine[p] += 1          # visibility only; never scored directly
                 if d_val:
                     pdisp[p] += 1
                     if d_val == "rejected-wrong":
                         pfp[p] += 1
                         pfp_human[p] += 1
-                if machine_refuted:
+                elif machine_refuted:
+                    # No human ruling: the machine verdict adjudicates, and must
+                    # land in the denominator it is being scored against.
+                    pdisp[p] += 1
                     pfp[p] += 1
-                    pfp_machine[p] += 1
             if len(ps) == 1:
                 psolo[ps[0]] += 1
                 psev_solo[ps[0]][sev] += 1
@@ -265,6 +295,7 @@ def main():
                     "disposed": pdisp[p], "false_positives": pfp[p],
                     "human_false_positives": pfp_human[p],
                     "machine_false_positives": pfp_machine[p],
+                    "severity_opinions": dict(psev_op[p]),
                     "tokens": ptokens[p] if ptoken_runs[p] else None,
                     "tokens_runs": ptoken_runs[p],
                 } for p in personas
@@ -297,6 +328,26 @@ def main():
         L.append(f"_{total - parsed} run dirs skipped — no parseable findings-snapshot "
                  f"(historical layout drift; the canonical `findings-snapshot.json` is forward-complete from 2026-05-30)._")
     L.append("")
+
+    # Severity accuracy — the third number SKILL.md §9 has always promised and
+    # never been able to compute. Silent until verdicts carrying the field accrue.
+    sev_tot = defaultdict(int)
+    for p in psev_op:
+        for k, v in psev_op[p].items():
+            sev_tot[k] += v
+    n_op = sum(sev_tot.values())
+    if n_op:
+        agree = sev_tot.get("agree", 0)
+        hi, lo = sev_tot.get("too-high", 0), sev_tot.get("too-low", 0)
+        L.append("## Severity accuracy")
+        L.append("")
+        L.append(f"**{100*agree/n_op:.0f}% agree** across {n_op} CONFIRMED/PLAUSIBLE verdicts "
+                 f"carrying a `severity_opinion` — {hi} filed too high, {lo} filed too low. "
+                 f"Skew {'high' if hi > lo else 'low' if lo > hi else 'balanced'}"
+                 f"{f' ({hi}:{lo})' if hi != lo else ''}. "
+                 "REFUTED verdicts are excluded by contract (no established mechanism to "
+                 "judge the filed tier against), as are verdicts written before 2026-08-09.")
+        L.append("")
 
     L.append("## Per-persona value")
     L.append("")
