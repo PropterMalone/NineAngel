@@ -1088,5 +1088,10 @@ rc=0; python3 "$DIR/test_assemble_wpr.py" || rc=$?
 rc_is $rc 0 "assemble-wpr suite passes"
 
 echo
+echo "--- true-cost per-request collapse suite (test_true_cost.py) ---"
+rc=0; python3 "$DIR/test_true_cost.py" || rc=$?
+rc_is $rc 0 "true-cost suite passes"
+
+echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

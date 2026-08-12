@@ -8,12 +8,19 @@ WHY THIS EXISTS
 LAST assistant message -- a context-window high-water mark, not spend. Verified
 2026-08-09 against subagent transcripts: the recorded figure matched each pass's
 peak single-turn context to within 0.2% across 8/8 agents, against cumulative
-flows 18.8x-43.5x larger. The ratio grows with turn count, so the metric is not
-even a consistent proxy: it flatters long agentic passes and penalises short
-ones with fat contexts.
+flows an order of magnitude larger (over the 1792 transcripts with >=5 requests:
+median 10.6x, p10 5.0x, p90 28.9x). The ratio grows with turn count, so the
+metric is not even a consistent proxy: it flatters long agentic passes and
+penalises short ones with fat contexts.
 
 This script reads the real numbers out of the subagent transcripts the harness
 writes, sums the four billable token classes, and prices them.
+
+The first cut of this script summed usage per transcript LINE, which
+double-counts (see `tally_transcript`). Figures it printed before 2026-08-09
+are high by roughly 2.1x -- including the $509.66 quoted for run
+20260807T142427Z-1dd77385, and the 18.8x-43.5x understatement range that used
+to be quoted in this docstring.
 
 ATTRIBUTION
 -----------
@@ -59,6 +66,7 @@ PRICES = {  # (input, output) USD per 1M tokens
 CACHE_WRITE_MULT = 1.25   # 5-minute TTL
 CACHE_READ_MULT = 0.10
 UNKNOWN_MODEL_FALLBACK = "claude-sonnet-5"
+SYNTHETIC_MODEL = "<synthetic>"  # harness placeholder on aborted turns
 
 
 def price_for(model):
@@ -85,14 +93,98 @@ def cost_of(counts, model):
 
 
 def tally_transcript(lines):
-    """Sum billable token classes over one agent transcript's assistant messages.
+    """Sum billable token classes over one agent transcript's API requests.
 
-    Returns (model, counts, turns). Model is the first one seen; a transcript
-    is one agent, so it does not switch models mid-run.
+    Returns ({model: counts}, requests).
+
+    A TRANSCRIPT IS NOT ONE MODEL. 138 of 2288 transcripts (6.0%) carried more
+    than one. A MINORITY of those -- 63, or 46% -- are only a trailing
+    `<synthetic>` abort record, which is skipped; the other 75 (54%) are
+    genuine mid-pass switches, one of them running 26 requests on Fable and 11
+    on Opus. Pricing a whole transcript at its first model, as the first cut
+    did, misprices those slices by up to 2x, so each request is priced at the
+    model that served it.
+
+    ONE REQUEST IS MANY LINES. The harness writes a transcript record per
+    content block of an assistant message, and every one of them repeats the
+    same `usage` object -- so a single billed API call appears 2-4 times
+    (fleet mean 2.33, max 27). Summing per line multiply-counts the cache
+    classes, which is most of the bill. Measured over all 2285 transcripts /
+    35,496 requests as of 2026-08-09: cache_write 2.74x, cache_read 2.19x,
+    input 2.98x, output only 1.05x -- output escapes because the non-terminal
+    duplicates carry ~2 output tokens while cache counters repeat at full
+    value. That asymmetry is what made cache writes look anomalous against
+    "genuinely new content"; the numerator was inflated and the denominator
+    was not. After collapsing, write amplification is 0.94x -- each token is
+    written to cache almost exactly once, which is what a healthy incremental
+    cache looks like.
+
+    EVERY ABSOLUTE COUNT ABOVE CARRIES ITS as-of DATE, because the corpus grows
+    monotonically: the same sweep read 2,285 transcripts on 2026-08-09 and
+    2,521 on 2026-08-12. Ratios are stable; counts are not. Quoting a bare
+    count as if it were a constant is how "2285" and "2288" ended up in the
+    same document meaning the same thing.
+
+    Collapsing on `requestId` (falling back to `message.id`) is safe: the two
+    keys agree, one or the other is present on 100% of records, and the cache
+    counters are identical across a request's records in 99.98% of cases. The
+    8 exceptions are a trailing all-zero record from an aborted turn, so the
+    selector takes the record with the most output tokens rather than the last.
+
+    Validation: deduped, `cache_read` of request N matches the total context of
+    request N-1 with median ratio 1.0000 (93.1% within 2%, 97.9% within 10%).
+    Per line it is 0.9893 with 18.3% of pairs outside 10% -- an incoherent
+    conversation. The collapsed sequence is the real one.
     """
-    c = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0}
-    model, turns = None, 0
-    for line in lines:
+    records, _ = collapse_requests(lines)
+    by_model = {}
+    for r in records:
+        c = by_model.setdefault(r["model"], {"input": 0, "output": 0,
+                                             "cache_write": 0, "cache_read": 0,
+                                             "requests": 0})
+        c["input"] += r["inp"]
+        c["output"] += r["out"]
+        c["cache_write"] += r["cr"]
+        c["cache_read"] += r["rd"]
+        c["requests"] += 1
+    return by_model, len(records)
+
+
+def parse_ts(s):
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def collapse_requests(lines):
+    """Collapse a transcript's usage-bearing lines to one record per API request.
+
+    THE one place the collapse is implemented. It used to exist twice -- once
+    here and once in a `requests_in_order` twin for `--breakdown` -- and the two
+    copies had already drifted in the commit that introduced them (only one
+    carried the OSError guard, and they differed on `<synthetic>` handling).
+    Five reviewer personas flagged it independently. The tool's entire
+    correctness rests on this function, so it gets one implementation.
+
+    Returns `(records, anomalies)`. `records` is an ordered list of per-request
+    dicts: `model`, `inp`, `cr`, `rd`, `out` (token counts for uncached input,
+    cache write, cache read, output) and `ts` (a UTC datetime or None).
+
+    `anomalies` counts requests whose duplicate records DISAGREED on the cache
+    counters while both carried real usage. The collapse assumes those counters
+    repeat identically across a request's records -- true for 35,488 of 35,496
+    requests when this was written, with all 8 exceptions being a benign
+    trailing all-zero record from an aborted turn (excluded here). That is a
+    measurement of one harness version, and this project does not version the
+    harness. A nonzero count means the assumption is eroding and every figure
+    downstream needs re-checking, so it is surfaced rather than swallowed.
+    """
+    by_request = {}
+    anomalies = 0
+    for i, line in enumerate(lines):
         try:
             d = json.loads(line)
         except (json.JSONDecodeError, TypeError):
@@ -103,22 +195,123 @@ def tally_transcript(lines):
         u = m.get("usage")
         if not isinstance(u, dict):
             continue
-        turns += 1
-        model = model or m.get("model")
-        c["input"] += u.get("input_tokens", 0) or 0
-        c["output"] += u.get("output_tokens", 0) or 0
-        c["cache_write"] += u.get("cache_creation_input_tokens", 0) or 0
-        c["cache_read"] += u.get("cache_read_input_tokens", 0) or 0
-    return model, c, turns
+        model = m.get("model")
+        if model == SYNTHETIC_MODEL:
+            continue  # aborted turn; carries all-zero usage and no real model
+        rec = {
+            "model": model,
+            "inp": u.get("input_tokens", 0) or 0,
+            "cr": u.get("cache_creation_input_tokens", 0) or 0,
+            "rd": u.get("cache_read_input_tokens", 0) or 0,
+            "out": u.get("output_tokens", 0) or 0,
+            "ts": parse_ts(d.get("timestamp")),
+        }
+        # `or i` keeps an id-less record as its own request rather than
+        # collapsing every such record onto a shared None key.
+        key = d.get("requestId") or m.get("id") or i
+        prev = by_request.get(key)
+        if prev is None:
+            by_request[key] = rec
+            continue
+        live = _has_usage(prev) and _has_usage(rec)
+        if live and (prev["cr"], prev["rd"], prev["inp"]) != (rec["cr"], rec["rd"], rec["inp"]):
+            anomalies += 1
+        if rec["out"] >= prev["out"]:
+            by_request[key] = rec
+    return list(by_request.values()), anomalies
 
 
-def parse_ts(s):
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(str(s).replace("Z", "+00:00")).astimezone(timezone.utc)
-    except (ValueError, TypeError):
-        return None
+def _has_usage(r):
+    """An all-zero record is an aborted turn, not a counter disagreement."""
+    return (r["cr"] or r["rd"] or r["inp"] or r["out"]) != 0
+
+
+GAP_BUCKETS = ("<60s", "60-300s", "300-600s", ">=600s", "unknown")
+
+
+def write_breakdown(transcripts):
+    """Where the cache-write budget goes. `transcripts` is an iterable of
+    already-collapsed record lists (see `collapse_requests`) -- NOT raw lines,
+    so `--breakdown` costs no extra disk read.
+
+    Contexts normally grow in an agentic loop, so a token that enters a context
+    should be written to cache once and `sum(cache_creation) ~= max(context)`.
+    The ratio is the amplification; a healthy incremental cache sits at ~1.0.
+    Writes split three ways:
+
+      first-turn  the dispatch prefix -- system prompt, tool schemas, the task.
+                  Irreducible per agent. NOTE it counts only what was WRITTEN:
+                  when sibling agents dispatch concurrently on a shared prefix,
+                  the first writes it and the rest READ it, so this figure
+                  understates true prefix size (measured 25,324 written against
+                  a 50,378-token prefix on a 2026-08-07 batch).
+      re-write    content already paid for that was NOT served from cache this
+                  turn. Baseline is `min(context_(N-1), context_N)`, NOT
+                  context_(N-1): context can SHRINK between turns, and content
+                  that no longer exists cannot have been re-written. Using the
+                  previous context alone booked shrink as re-write -- 300 turns
+                  fleet-wide (0.90%) carrying 64% of the reported re-write mass,
+                  and it drove `new` negative in 16 transcripts, which is
+                  structurally impossible. Bounding by the current context makes
+                  re-write <= this turn's cache_creation by construction, so
+                  `new` cannot go negative. On a shrinking turn that leaves at
+                  most the turn's own write chargeable: with no growth, tokens
+                  written are content that already existed and was not served
+                  from cache. The vanished remainder is dropped, not re-written.
+      new         everything else: genuinely new content entering the context.
+
+    ORDERING ASSUMPTION: records are taken in transcript order and treated as
+    chronological, because the gap histogram compares adjacent timestamps.
+    Verified 0 of 33,404 adjacent pairs out of order fleet-wide, but nothing
+    enforces it, so violations are counted into `out_of_order` rather than
+    silently skewing the buckets.
+    """
+    b = {"first": 0, "rewrite": 0, "new": 0, "write": 0, "peak": 0,
+         "requests": 0, "transcripts": 0, "rewrite_turns": 0, "turns": 0,
+         "out_of_order": 0, "shrink_turns": 0,
+         "rewrite_by_gap": {k: 0 for k in GAP_BUCKETS}}
+    for rs in transcripts:
+        if not rs:
+            continue
+        b["transcripts"] += 1
+        b["requests"] += len(rs)
+        peak = prev_ctx = 0
+        prev_ts = None
+        for i, r in enumerate(rs):
+            ctx = r["inp"] + r["rd"] + r["cr"]
+            peak = max(peak, ctx)
+            b["write"] += r["cr"]
+            if i == 0:
+                b["first"] += r["cr"]
+            else:
+                b["turns"] += 1
+                if ctx < prev_ctx:
+                    b["shrink_turns"] += 1
+                # content that no longer exists cannot have been re-written
+                rw = min(prev_ctx, ctx) - r["rd"] - r["inp"]
+                if rw > 0:
+                    b["rewrite"] += rw
+                    b["rewrite_turns"] += 1
+                    if r["ts"] and prev_ts:
+                        if r["ts"] < prev_ts:
+                            b["out_of_order"] += 1
+                        g = (r["ts"] - prev_ts).total_seconds()
+                        k = ("<60s" if g < 60 else "60-300s" if g < 300
+                             else "300-600s" if g < 600 else ">=600s")
+                    else:
+                        k = "unknown"
+                    b["rewrite_by_gap"][k] += rw
+            prev_ctx, prev_ts = ctx, r["ts"]
+        b["peak"] += peak
+    b["new"] = b["write"] - b["first"] - b["rewrite"]
+    b["amplification"] = round(b["write"] / b["peak"], 2) if b["peak"] else None
+    # Per turn, re-write <= that turn's cache_creation, so summed it is <=
+    # write - first and `new` is non-negative BY CONSTRUCTION. This flag is
+    # therefore unreachable today, and it stays exactly for that reason: it is a
+    # canary on the invariant. The predecessor formula had no such check and
+    # printed a "-61.9%" share of a budget, which read as a real measurement.
+    b["coherent"] = b["new"] >= 0 and b["rewrite"] >= 0 and b["first"] >= 0
+    return b
 
 
 # --- imperative shell ------------------------------------------------------
@@ -155,6 +348,9 @@ def main():
     ap.add_argument("--projects-root", default=None)
     ap.add_argument("--slack-seconds", type=int, default=900,
                     help="widen the window each side; transcripts flush after the pass ends")
+    ap.add_argument("--breakdown", action="store_true",
+                    help="split the cache-write budget into first-turn prefix, "
+                         "re-write, and genuinely-new content")
     args = ap.parse_args()
 
     run = Path(args.run_dir)
@@ -174,28 +370,53 @@ def main():
     files = find_transcripts(run, started, ended, args.projects_root)
     by_model, total = {}, {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0}
     usd_total, guessed_models, turns_total = 0.0, set(), 0
+    collapsed, anomalies_total, matched = [], 0, 0
 
     for f in files:
         try:
-            model, c, turns = tally_transcript(f.read_text(errors="replace").splitlines())
+            lines = f.read_text(errors="replace").splitlines()
         except OSError:
             continue
-        if turns == 0:
+        records, anomalies = collapse_requests(lines)
+        if not records:
             continue
-        usd, guessed = cost_of(c, model)
-        if guessed and model:
-            guessed_models.add(model)
-        key = model or "unknown"
-        slot = by_model.setdefault(key, {"agents": 0, "turns": 0, "usd": 0.0,
-                                         **{k: 0 for k in total}})
-        slot["agents"] += 1
-        slot["turns"] += turns
-        slot["usd"] += usd
-        for k in total:
-            slot[k] += c[k]
-            total[k] += c[k]
-        usd_total += usd
-        turns_total += turns
+        matched += 1
+        anomalies_total += anomalies
+        if args.breakdown:
+            collapsed.append(records)  # read once; --breakdown costs no re-read
+
+        per_model = {}
+        for r in records:
+            c = per_model.setdefault(r["model"], {"input": 0, "output": 0,
+                                                  "cache_write": 0,
+                                                  "cache_read": 0, "requests": 0})
+            c["input"] += r["inp"]
+            c["output"] += r["out"]
+            c["cache_write"] += r["cr"]
+            c["cache_read"] += r["rd"]
+            c["requests"] += 1
+
+        for model, c in per_model.items():
+            usd, guessed = cost_of(c, model)
+            if guessed and model:
+                guessed_models.add(model)
+            key = model or "unknown"
+            slot = by_model.setdefault(key, {"agents": 0, "requests": 0, "usd": 0.0,
+                                             **{k: 0 for k in total}})
+            # `agents`: transcripts in which this model served at least one
+            # request. A mid-pass switch counts once for EACH model it used, so
+            # this column can sum above the matched-transcript count -- that is
+            # the honest reading. Crediting only a "primary" model, as the first
+            # cut did, left the other model showing real dollars against 0
+            # agents and 0 requests.
+            slot["agents"] += 1
+            slot["requests"] += c["requests"]
+            slot["usd"] += usd
+            usd_total += usd
+            for k in total:
+                slot[k] += c[k]
+                total[k] += c[k]
+        turns_total += len(records)
 
     # The time window is a scope, not an attribution: concurrent work from other
     # sessions lands inside it. Compare against the run's own dispatch count so a
@@ -212,14 +433,20 @@ def main():
         "tokens_cumulative": cum,
         "tokens_recorded_peak": recorded,
         "understatement_x": round(cum / recorded, 1) if recorded else None,
-        "agents_matched": sum(v["agents"] for v in by_model.values()),
+        # transcripts matched, not the sum of by_model `agents` -- a mixed-model
+        # transcript appears under each model it used, so that sum can exceed it.
+        "agents_matched": matched,
         "dispatches_logged": dispatched or None,
-        "turns": turns_total,
+        "requests": turns_total,
+        "collapse_anomalies": anomalies_total,
         "by_class": total,
         "by_model": {k: {**v, "usd": round(v["usd"], 2)} for k, v in by_model.items()},
         "unpriced_models": sorted(guessed_models),
         "method": "time-window scope over subagent transcripts; no per-persona attribution",
     }
+
+    if args.breakdown:
+        payload["write_breakdown"] = write_breakdown(collapsed)
 
     if args.write:
         usage["cost"] = payload
@@ -235,7 +462,8 @@ def main():
         return 0
 
     print(f"run {run.name}")
-    print(f"  agents matched : {payload['agents_matched']}  ({turns_total} metered turns)")
+    print(f"  agents matched : {payload['agents_matched']}  "
+          f"({turns_total} API requests)")
     if dispatched and payload["agents_matched"] != dispatched:
         d = payload["agents_matched"] - dispatched
         print(f"  ! window caught {abs(d)} {'more' if d > 0 else 'fewer'} transcripts than the "
@@ -250,10 +478,55 @@ def main():
         f"{k}={v:,}" for k, v in total.items()))
     print("  by model:")
     for k, v in sorted(by_model.items(), key=lambda kv: -kv[1]["usd"]):
-        print(f"    {k:24} {v['agents']:3} agents  {v['turns']:5} turns  ${v['usd']:8,.2f}")
+        print(f"    {k:24} {v['agents']:3} agents  {v['requests']:5} requests  "
+              f"${v['usd']:8,.2f}")
+    if len(by_model) > 1:
+        print("    (a transcript that switched model mid-pass is counted under "
+              "each model it used, so `agents` can sum above the matched total)")
     if guessed_models:
         print(f"  ! unpriced models fell back to {UNKNOWN_MODEL_FALLBACK}: "
               + ", ".join(sorted(guessed_models)))
+    if anomalies_total:
+        print(f"  ! {anomalies_total} request(s) had duplicate records disagreeing "
+              "on cache counters -- the collapse assumption is eroding; re-check "
+              "the harness transcript format before trusting these figures.")
+
+    b = payload.get("write_breakdown")
+    if b and b["write"]:
+        print("  cache-write budget:")
+        print(f"    amplification  : {b['amplification']}x  "
+              f"(sum writes / sum peak context; ~1.0 = each token written once)")
+        rows = (("first", "first-turn prefix (written half only)"),
+                ("rewrite", "re-write (cache lost between turns)"),
+                ("new", "genuinely-new content"))
+        if b["coherent"]:
+            for k, label in rows:
+                print(f"    {label:38} {b[k]:12,}  {b[k]/b['write']*100:5.1f}%")
+        else:
+            # A negative component means the model of the data is wrong. Shares
+            # would render as e.g. "-61.9%" -- a negative share of a budget --
+            # which shipped once and read as a real measurement. Never again:
+            # print raw counts and say plainly that the decomposition is broken.
+            print("    ! DECOMPOSITION INCOHERENT — a component is negative, so "
+                  "shares are meaningless and are not shown.")
+            for k, label in rows:
+                print(f"    {label:38} {b[k]:12,}")
+            print("      Investigate before quoting any of these figures.")
+        # `turns` excludes each transcript's first request (no preceding turn to
+        # measure a gap against), so it is `requests` minus `transcripts`.
+        print(f"    re-write turns : {b['rewrite_turns']}/{b['turns']} "
+              f"({b['rewrite_turns']/max(b['turns'],1)*100:.1f}%)"
+              f"  [turns = {b['requests']} requests - {b['transcripts']} transcripts;"
+              f" a first request has no preceding turn]")
+        print("    re-write tokens by inter-turn gap: "
+              + "  ".join(f"{k} {v/max(b['rewrite'],1)*100:.0f}%"
+                          for k, v in b["rewrite_by_gap"].items()))
+        if b["shrink_turns"]:
+            print(f"    ({b['shrink_turns']} turn(s) where context shrank; their "
+                  "vanished content is NOT counted as re-write)")
+        if b["out_of_order"]:
+            print(f"    ! {b['out_of_order']} adjacent pair(s) out of chronological "
+                  "order — gap buckets for those are unreliable.")
     return 0
 
 
