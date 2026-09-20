@@ -23,20 +23,26 @@ if ! BACKEND_DESCRIPTION="$(python3 "$SCRIPT_DIR/run-reducer-sandbox.py" --descr
 fi
 RUNNER_BACKEND=""
 RUNNER_IDENTITY=""
+RUNNER_MODEL=""
+# Cross-process exit contract: run-reducer-sandbox 75 -> sharder 4 -> this
+# typed degraded reason. Keep the names beside their numeric wire values.
+RC_UNPROVABLE_RUNNER_CLEANUP=75
+RC_SHARD_DEPTH_EXCEEDED=3
+RC_SHARD_RUNNER_CLEANUP=4
 if [[ -z "$reason" && -n "$BACKEND_DESCRIPTION" ]]; then
-  IFS=$'\t' read -r RUNNER_BACKEND RUNNER_IDENTITY < <(
+  IFS=$'\t' read -r RUNNER_BACKEND RUNNER_IDENTITY RUNNER_MODEL < <(
     python3 - "$BACKEND_DESCRIPTION" <<'PY'
 import json,sys
 d=json.loads(sys.argv[1])
-print(d['backend']+'\t'+d['identity'])
+print(d['backend']+'\t'+d['identity']+'\t'+d['model'])
 PY
   )
 fi
 if [[ -z "$reason" ]] && ! python3 - "$QUALIFICATION" "$RUNNER_FINGERPRINT" \
-    "$RUNNER_BACKEND" "$RUNNER_IDENTITY" <<'PY'
+    "$RUNNER_BACKEND" "$RUNNER_IDENTITY" "$RUNNER_MODEL" <<'PY'
 import json,sys
 try:
- d=json.load(open(sys.argv[1])); ok=(d.get('qualified') is True and d.get('model') == 'gpt-5.6-sol'
+ d=json.load(open(sys.argv[1])); ok=(d.get('qualified') is True and d.get('model') == sys.argv[5]
      and d.get('auth') == 'chatgpt'
      and d.get('runner_fingerprint') == sys.argv[2]
      and d.get('runner_backend') == sys.argv[3]
@@ -73,8 +79,8 @@ if [[ "$workset_tokens" -gt 24000 ]]; then
     exit 0
   fi
   degraded="reducer-failed-twice"
-  [[ "$rc" -eq 3 ]] && degraded="shard-depth-exceeded"
-  [[ "$rc" -eq 4 ]] && degraded="runner-cleanup-failed"
+  [[ "$rc" -eq "$RC_SHARD_DEPTH_EXCEEDED" ]] && degraded="shard-depth-exceeded"
+  [[ "$rc" -eq "$RC_SHARD_RUNNER_CLEANUP" ]] && degraded="runner-cleanup-failed"
   python3 "$SCRIPT_DIR/validate-integration-decisions.py" "$WORKSET" \
     --write-union "$FINAL" --reason "$degraded"
   python3 "$SCRIPT_DIR/record-integration-usage.py" "$RUN_DIR" --degraded-reason "$degraded"
@@ -93,12 +99,17 @@ for attempt in 1 2; do
   child=$!
   printf '%s\n' "$child" > "$RUN_DIR/integration-runner.pid"
   (
+    sleeper=""
+    trap '[[ -n "$sleeper" ]] && kill "$sleeper" 2>/dev/null || true; exit 0' TERM INT HUP
     while kill -0 "$child" 2>/dev/null; do
       tmp="$RUN_DIR/.integration-heartbeat.tmp"
       printf '{"version":1,"status":"running","attempt":%s,"pid":%s,"updated_at":"%s"}\n' \
         "$attempt" "$child" "$(date --iso-8601=seconds)" > "$tmp"
       mv "$tmp" "$RUN_DIR/integration-heartbeat.json"
-      sleep 30
+      sleep 30 &
+      sleeper=$!
+      wait "$sleeper" || exit 0
+      sleeper=""
     done
   ) &
   heartbeat=$!
@@ -106,7 +117,7 @@ for attempt in 1 2; do
   wait "$child" || rc=$?
   kill "$heartbeat" 2>/dev/null || true
   wait "$heartbeat" 2>/dev/null || true
-  if [[ "$rc" -eq 75 ]]; then
+  if [[ "$rc" -eq "$RC_UNPROVABLE_RUNNER_CLEANUP" ]]; then
     cleanup_failure=1
     break
   fi

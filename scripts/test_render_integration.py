@@ -70,8 +70,13 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(snapshot["integration_degraded"])
 
     def test_degraded_report_is_bounded_and_renders_legacy_skip_shape(self):
-        union = validator.deterministic_union(self.workset, "no-qualified-runner")
-        snapshot, _ = renderer.build_artifacts(self.workset, union, Path("/tmp"))
+        bounded_workset = dict(self.workset)
+        bounded_workset["candidates"] = [
+            candidate(i, "adv", "critical" if i == 1 else "important")
+            for i in range(1, 8)
+        ]
+        union = validator.deterministic_union(bounded_workset, "no-qualified-runner")
+        snapshot, _ = renderer.build_artifacts(bounded_workset, union, Path("/tmp"))
         snapshot["personas_dropped"] = [
             {"perf": "no hot-path code"}, "caritas", {"name": "pii"}, None, ""]
         report = renderer.render_report(snapshot)
@@ -81,6 +86,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn("unknown entry 4 (reason not recorded)", report)
         self.assertNotIn("None (None)", report)
         self.assertIn("## Full candidate ledger", report)
+        self.assertIn("Ledger size: 7 candidates", report)
+        self.assertEqual(len(snapshot["findings"]), 7)
+        self.assertIn("Finding 5", report)
+        self.assertNotIn("Finding 6", report)
+        self.assertNotIn("Finding 7", report)
+        self.assertNotIn("## Critical", report)
         self.assertNotIn("## Important", report)
 
 

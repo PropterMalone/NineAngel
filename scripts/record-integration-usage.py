@@ -19,9 +19,14 @@ def main():
         row = {"phase": "integrator", "name": "semantic-reducer", "model": t.get("model"),
                "backend": "codex-subscription", "total_tokens": t.get("total_tokens"),
                "tool_uses": 0, "duration_ms": t.get("duration_ms"), "started_at": None,
-               "ended_at": now, "reader_pack": False, "initial_context_tokens": inp,
-               "peak_context_tokens": (inp + out if isinstance(inp, int) and isinstance(out, int) else None),
+               "ended_at": now, "reader_pack": False,
+               # Codex reports cumulative turn usage, not a measured initial or
+               # peak context. Preserve it under truthful names and leave the
+               # legacy context fields unknown rather than fabricating them.
+               "input_tokens": inp, "output_tokens": out,
+               "initial_context_tokens": None, "peak_context_tokens": None,
                "request_count": t.get("request_count"),
+               "turn_count": t.get("turn_count"),
                "note": "ChatGPT-authenticated structured-output reducer"}
     else:
         row = {"phase": "integrator", "name": "deterministic-union", "model": None,

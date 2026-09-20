@@ -9,11 +9,11 @@ if ! BACKEND_DESCRIPTION="$(python3 "$SCRIPT_DIR/run-reducer-sandbox.py" --descr
   echo "probe-integration-runner: Codex CLI must be signed in with ChatGPT" >&2
   exit 1
 fi
-IFS=$'\t' read -r RUNNER_BACKEND RUNNER_IDENTITY < <(
+IFS=$'\t' read -r RUNNER_BACKEND RUNNER_IDENTITY RUNNER_MODEL < <(
   python3 - "$BACKEND_DESCRIPTION" <<'PY'
 import json,sys
 d=json.loads(sys.argv[1])
-print(d['backend']+'\t'+d['identity'])
+print(d['backend']+'\t'+d['identity']+'\t'+d['model'])
 PY
 )
 
@@ -47,11 +47,11 @@ python3 "$SCRIPT_DIR/run-reducer-sandbox.py" --mandate "$SKILL_DIR/reducer.md" \
 python3 "$SCRIPT_DIR/validate-integration-decisions.py" "$tmp/workset.json" "$tmp/out/integration-decisions.json"
 RUNNER_FINGERPRINT="$(python3 "$SCRIPT_DIR/runner-fingerprint.py")"
 python3 - "$tmp" "$QUALIFICATION" "$RUNNER_FINGERPRINT" \
-  "$RUNNER_BACKEND" "$RUNNER_IDENTITY" <<'PY'
+  "$RUNNER_BACKEND" "$RUNNER_IDENTITY" "$RUNNER_MODEL" <<'PY'
 import datetime,json,os,sys,tempfile
 from pathlib import Path
 root,out,fingerprint=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3]
-backend,identity=sys.argv[4],sys.argv[5]
+backend,identity,model=sys.argv[4],sys.argv[5],sys.argv[6]
 t=json.load(open(root/'out/integration-telemetry.json'))
 d=json.load(open(root/'out/integration-decisions.json'))
 sentinels=(b'nineangel-api-key-must-not-be-used',b'nineangel-codex-key-must-not-be-used')
@@ -64,11 +64,11 @@ checks={'chatgpt_auth':t.get('auth')=='chatgpt' and t.get('endpoint')=='codex-cl
  'no_tools_executed':t.get('tool_policy')=='disabled-fail-closed'
                      and t.get('tool_events')==0
                      and isinstance(t.get('blocked_tool_events'),int),
- 'bounded_initial_context':isinstance(t.get('input_tokens'),int) and t['input_tokens']<=20000,
+ 'bounded_turn_input':isinstance(t.get('input_tokens'),int) and t['input_tokens']<=20000,
  'nonvacuous_lineage':merged and {'c_probe_003','c_probe_004'} <= excluded,
  'api_credentials_scrubbed':credential_clean}
 if not all(checks.values()): raise SystemExit('qualification failed: '+json.dumps(checks,sort_keys=True))
-body={'version':3,'qualified':True,'model':'gpt-5.6-sol','auth':'chatgpt',
+body={'version':3,'qualified':True,'model':model,'auth':'chatgpt',
  'runner_fingerprint':fingerprint,'runner_backend':backend,'runner_identity':identity,
  'qualified_at':datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),
  'checks':checks,'input_tokens':t['input_tokens']}

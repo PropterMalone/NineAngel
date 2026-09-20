@@ -73,6 +73,26 @@ class WorksetTests(unittest.TestCase):
         self.assertEqual(finding["line"], "29,33")
         self.assertEqual(finding["description"], "`NAME` reaches a remote shell.")
 
+    def test_spaced_location_lists_remain_one_location_and_leave_clean_description(self):
+        for location in ("29, 33", "29-33, 35"):
+            with self.subTest(location=location):
+                text = ("#### Important\n"
+                        f"- **Location list** `[trivial]` — `render-in-word.sh:{location}` — "
+                        "The finding description.\n")
+                finding = parser.parse_findings_lossless(text, "adv-p1")["findings"][0]
+                self.assertEqual(finding["line"], location)
+                self.assertEqual(finding["description"], "The finding description.")
+
+    def test_named_reason_normalization_rejects_malformed_canonical_objects(self):
+        from integration_common import normalize_named_reasons
+        self.assertEqual(normalize_named_reasons([{"adv": "budget"}]),
+                         [{"name": "adv", "reason": "budget"}])
+        self.assertEqual(normalize_named_reasons([{"persona": "adv", "reason": "budget"}]),
+                         [{"name": "adv", "reason": "budget"}])
+        for row in ({"reason": "missing name"}, {"persona": "adv"}):
+            with self.subTest(row=row), self.assertRaises(ValueError):
+                normalize_named_reasons([row])
+
     def test_shard_expansion_preserves_semantic_side_channels(self):
         compact_candidate = {
             "id": "c_shard_001_001", "origin_candidate_ids": ["c_a", "c_b"],
@@ -133,11 +153,15 @@ class WorksetTests(unittest.TestCase):
              "input_tokens": 20, "cached_input_tokens": 4, "output_tokens": 6,
              "reasoning_output_tokens": 2, "total_tokens": 26, "duration_ms": 30},
         ]
-        result = sharder.aggregate_telemetry(rows, 2)
+        result = sharder.aggregate_telemetry(rows, [2])
         self.assertIsNone(result["request_count"])
         self.assertEqual(result["turn_count"], 2)
         self.assertEqual(result["blocked_tool_events"], 1)
         self.assertEqual(result["total_tokens"], 39)
+        self.assertEqual(result["initial_shard_count"], 2)
+        self.assertEqual(result["shard_level_counts"], [2])
+        self.assertEqual(result["shards"], 2)
+        self.assertEqual(result["final_reconciliation_turns"], 1)
 
 
 if __name__ == "__main__": unittest.main()

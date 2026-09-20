@@ -154,9 +154,12 @@ def aggregate(entries, run_dir, snapshot):
                 for x in entries
                 if x.get("phase") == "persona"
             ],
-        "integrator": phase_record(integrator, ("model", "total_tokens", "duration_ms", "tool_uses",
-                                                "initial_context_tokens", "peak_context_tokens",
-                                                "request_count")) if integrator else None,
+            "integrator": phase_record(
+                integrator,
+                ("model", "total_tokens", "duration_ms", "tool_uses",
+                 "initial_context_tokens", "peak_context_tokens", "input_tokens",
+                 "output_tokens", "request_count", "turn_count"),
+            ) if integrator else None,
             "reconcilers": [
                 phase_record(x, ("name", "model", "total_tokens", "duration_ms", "tool_uses"))
                 for x in reconciler_entries

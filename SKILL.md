@@ -709,11 +709,15 @@ the durable source, but integration is now a bounded file pipeline:
    an unprovable runner cleanup, or a sharding limit produces a schema-valid deterministic
    union with a prominent `DEGRADED INTEGRATION` banner and a runnable retry command. The
    Markdown is bounded; the required snapshot retains the complete union ledger.
-5. Qualify a host once with `scripts/probe-integration-runner.sh`. The semantic route
-   requires Codex CLI signed in with ChatGPT. It uses the existing ChatGPT/Codex
-   subscription allowance; OpenAI API-key auth is rejected, API-key environment variables
-   are scrubbed, local tool hosts are disabled, executable tool events are rejected, and
-   the recognized fail-closed Code Mode refusal is counted separately.
+5. Qualify a host with `scripts/probe-integration-runner.sh`. The semantic route requires
+   the exact supported Codex CLI release signed in with ChatGPT. The CLI binary and trusted
+   runner surface are fingerprint-bound, so a CLI or runner change invalidates qualification
+   until the probe succeeds again. It uses the existing ChatGPT/Codex subscription allowance;
+   OpenAI API-key auth is rejected; the child gets only an explicit auth/TLS/proxy environment
+   allowlist; hosted web search and local tool hosts are disabled before inference; and the
+   reducer mandate is a developer instruction separate from nonce-delimited untrusted workset
+   data. Emitted events are audited as a secondary guard, with executable tool events rejected
+   and the recognized fail-closed Code Mode refusal counted separately.
    `resume-run.sh` is diagnostic only and prints the exact `integrate-run.sh --resume`
    command. Use `--retry-reducer` only for a pristine degraded run; once verification or
    dispositions exist, use the printed `--clone-retry` path.

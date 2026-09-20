@@ -133,7 +133,10 @@ def normalize_named_reasons(rows, label="status entry", strict=True):
             continue
         name = row.get("name") or row.get("persona")
         reason = row.get("reason")
-        if not name and len(row) == 1:
+        # Historical ``{"persona-name": "reason"}`` maps are accepted, but a
+        # malformed canonical object such as ``{"reason": "x"}`` must not turn
+        # the field name itself into a persona called "reason".
+        if not name and len(row) == 1 and not ({"name", "persona", "reason"} & row.keys()):
             name, reason = next(iter(row.items()))
         if not isinstance(name, str) or not name.strip():
             if strict:

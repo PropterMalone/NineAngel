@@ -19,6 +19,9 @@ validator = importlib.util.module_from_spec(spec); spec.loader.exec_module(valid
 
 TARGET = 16000
 HARD = 24000
+RUNNER_CLEANUP_EXIT = 75
+SHARD_DEPTH_EXIT = 3
+SHARD_RUNNER_CLEANUP_EXIT = 4
 
 
 class RunnerCleanupError(RuntimeError):
@@ -101,7 +104,7 @@ def call_reducer(workset_path, out_dir, mandate, schema, backend="auto",
         if runner_identity:
             command += ["--expected-identity", runner_identity]
         result = subprocess.run(command, text=True, capture_output=True)
-        if result.returncode == 75:
+        if result.returncode == RUNNER_CLEANUP_EXIT:
             raise RunnerCleanupError("runner cleanup failed; refusing another reducer attempt")
         decisions_path = attempt_dir / "integration-decisions.json"
         if result.returncode == 0 and decisions_path.is_file():
@@ -111,7 +114,7 @@ def call_reducer(workset_path, out_dir, mandate, schema, backend="auto",
     raise RuntimeError(f"reducer failed twice for {workset_path.name}")
 
 
-def aggregate_telemetry(rows, shard_count):
+def aggregate_telemetry(rows, level_counts):
     total = lambda key: sum(row.get(key) or 0 for row in rows)
     return {"version": 1, "endpoint": rows[0].get("endpoint"),
             "auth": rows[0].get("auth"), "model": rows[0].get("model"),
@@ -122,7 +125,13 @@ def aggregate_telemetry(rows, shard_count):
             "cached_input_tokens": total("cached_input_tokens"),
             "reasoning_output_tokens": total("reasoning_output_tokens"),
             "total_tokens": total("total_tokens"), "duration_ms": total("duration_ms"),
-            "response_status": "completed", "shards": shard_count}
+            "response_status": "completed",
+            # ``shards`` is retained for ADR-22 history, but now counts every
+            # shard-reduction turn rather than only the first level.
+            "shards": sum(level_counts),
+            "initial_shard_count": level_counts[0],
+            "shard_level_counts": level_counts,
+            "final_reconciliation_turns": 1}
 
 
 def compact_candidate(shard_i, finding_i, finding, candidates):
@@ -218,6 +227,7 @@ def main():
     prior_derived, prior_notes, prior_registry = [], [], []
     try:
         shards = pack(original)
+        level_counts = [len(shards)]
         for i, shard in enumerate(shards, 1):
             sdir = root / f"shard-{i:03d}"; sdir.mkdir(exist_ok=True)
             atomic_json(sdir / "workset.json", shard)
@@ -237,7 +247,9 @@ def main():
             # final expansion still resolves directly to the original candidates.
             level2_candidates, level2_exclusions = [], []
             level2_map = {c["id"]: c for c in compact["candidates"]}
-            for i, shard in enumerate(pack(compact), 1):
+            second_level_shards = pack(compact)
+            level_counts.append(len(second_level_shards))
+            for i, shard in enumerate(second_level_shards, 1):
                 sdir = root / "level-2" / f"shard-{i:03d}"; sdir.mkdir(parents=True, exist_ok=True)
                 atomic_json(sdir / "workset.json", shard)
                 decisions, usage = call_reducer(sdir / "workset.json", sdir, Path(args.mandate), Path(args.schema), args.backend, args.runner_identity)
@@ -268,11 +280,13 @@ def main():
         if errors: raise RuntimeError("expanded decisions invalid: " + "; ".join(errors))
         atomic_json(run_dir / "integration-decisions.json", expanded)
         atomic_json(run_dir / "integration-telemetry.json",
-                    aggregate_telemetry(telemetry, len(shards)))
+                    aggregate_telemetry(telemetry, level_counts))
     except RunnerCleanupError as exc:
-        print(f"shard-integration: {exc}", file=sys.stderr); raise SystemExit(4)
+        print(f"shard-integration: {exc}", file=sys.stderr)
+        raise SystemExit(SHARD_RUNNER_CLEANUP_EXIT)
     except OverflowError as exc:
-        print(f"shard-integration: {exc}", file=sys.stderr); raise SystemExit(3)
+        print(f"shard-integration: {exc}", file=sys.stderr)
+        raise SystemExit(SHARD_DEPTH_EXIT)
     except Exception as exc:
         print(f"shard-integration: {exc}", file=sys.stderr); raise SystemExit(1)
 

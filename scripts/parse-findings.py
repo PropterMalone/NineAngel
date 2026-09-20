@@ -41,8 +41,11 @@ _SEV_INLINE = re.compile(
 _BULLET = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
 _BOLD_TITLE = re.compile(r"\*\*(.+?)\*\*")
 _NONE = re.compile(r"^\s*(none\.?|no findings\.?)\s*$", re.IGNORECASE)
-# file:line — require a dot-extension so ratios/times/`N:M` don't match. Range tail ok.
-_FILELINE = re.compile(r"`?([\w./-]+\.[A-Za-z0-9]+):(\d+(?:[-,]\d+)*)`?")
+# file:line — require a dot-extension so ratios/times/`N:M` don't match. Preserve
+# ordinary spaced/unspaced range and list forms (``29-33, 35``) as one location.
+_FILELINE = re.compile(
+    r"`?([\w./-]+\.[A-Za-z0-9]+):(\d+(?:\s*(?:-|,)\s*\d+)*)`?"
+)
 # Section headers that are NOT severity sections — skipped, not errored.
 _SKIP_HDR = re.compile(
     r"^\s*#{1,4}\s*(findings|cap overflow|contradictions|reconciler notes|"
