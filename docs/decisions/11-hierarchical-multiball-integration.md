@@ -4,6 +4,21 @@ Date: 2026-07-19
 Status: accepted (the user + Claude, designed live during the --full run)
 Supersedes: ADR-04's model ladder *for big-bundle integrations only* (the bounded-dispatch rule itself stands and is strengthened here)
 
+> **Partially superseded by ADR-20 (2026-08-30).** Per-persona reconciled views remain an
+> optional compact input and failed views still degrade lane-locally to exact union. Stage 2
+> is now a workset-driven isolated reducer, not an agent reading reconciled/raw files; its
+> watchdog is PID + named heartbeat, and its terminal fallback is deterministic union rather
+> than inline synthesis. The stall evidence and hierarchical motivation remain historical.
+
+> **Amended by ADR-19 (2026-08-26).** Change 3 (size-dependent ladder) is **moot rather than
+> wrong**: with Fable retired there is no small-bundle Fable rung, so the ladder collapses to a
+> flat `claude-opus-5[1m]` → inline at every bundle size. Change 3's revisit trigger ("if Fable
+> stall telemetry is clean for a month, restore Fable-first") can no longer fire and is retired.
+> Its sibling clause — "if Opus-first big integrations stall at a comparable rate, the
+> Fable-specificity theory is wrong" — **stays live and becomes easier to evaluate**, since every
+> integration is Opus-first from this date. Changes 1, 2, 4 and 5 (Stage-1 reconcilers, bounded
+> dispatch, watchdog, dispatch timestamps) are untouched.
+
 ## Problem
 
 The integrator stalls on big runs — repeatedly. Documented instances: 2026-06-09 meta run (7860s wall), 2026-06-10 diff run, 2026-07-19 --full (29 min mid-turn wedge, killed). the user's felt rate: "a majority of big integrator runs." Historical usage.log shows multiple runs with 50min–2.8h walls (run-level wall was recorded; per-dispatch wall was null due to the record-dispatch.sh bug corrected in change 5 below), consistent with stall-then-recover. The per-dispatch stall could not be *measured* because record-dispatch.sh wrote `started_at:null`/`ended_at:null`, so every dispatch-level `wall` was 0s. Run-level walls (the end-to-end timer in usage.json) were recorded for some runs — those are the multi-hour figures above.
@@ -26,7 +41,7 @@ Five changes, the first being the structural one (the user's design):
 
 ### 2. Mechanical watchdog on stage 2 (and any lone load-bearing dispatch)
 
-Dispatch-time, not prose: immediately after dispatching the integrator, arm a background `until [ -f "$RUN_DIR/report.md" ] || timeout` loop. Liveness tripwire: the integrator touches `$RUN_DIR/PROGRESS` per phase; PROGRESS mtime stale >5 min = wedged (kill + advance ladder) even inside the wall cap. Never rely on completion notifications alone. (07-19 validation: the watchdog fired seconds after the Opus retry delivered.)
+Dispatch-time, not prose: immediately after dispatching the integrator, arm a background `until [ -f "$RUN_DIR/findings-snapshot.json" ] || timeout` loop. **(Amended 2026-08-13 — the gate was `report.md` and that is the wrong artifact.** `integrator.md:130` has the integrator build `report.md` in section-sized appends, so its existence means "started writing", not "delivered"; a partial report satisfying the gate is worse than a late one. The snapshot is the last artifact owed. The same amendment adds a 45s grace re-check after the wall cap, because the cap has now twice declared the run dead seconds before the artifact landed while step C's "check once whether it has just delivered" sat in prose the watchdog never executed. See SKILL.md §5 for the current loop.) Liveness tripwire: the integrator touches `$RUN_DIR/PROGRESS` per phase; PROGRESS mtime stale >5 min = wedged (kill + advance ladder) even inside the wall cap. Never rely on completion notifications alone. (07-19 validation: the watchdog fired seconds after the Opus retry delivered.)
 
 ### 3. Big-bundle integrations go Opus-first
 

@@ -195,6 +195,25 @@ def check(run_dir, logged, pre_append=False):
             snap = json.loads(snap_path.read_text())
         except Exception:
             snap = None
+        reducer_meta = None
+        meta_path = run_dir / "run-meta.json"
+        if meta_path.is_file():
+            try:
+                reducer_meta = json.loads(meta_path.read_text())
+            except Exception:
+                reducer_meta = {}
+        reducer_era = ((snap or {}).get("version") == 3 or
+                       (reducer_meta or {}).get("integration_pipeline") == "semantic-reducer-v1")
+        if reducer_era:
+            if not (run_dir / "report.md").is_file():
+                missing.append("report.md")
+            if (reducer_meta or {}).get("status") != "ready":
+                missing.append("ready run-meta.json")
+            for name in ("integration-workset.json", "integration-decisions.json"):
+                if not (run_dir / name).is_file():
+                    missing.append(name)
+            if (snap or {}).get("version") != 3 or (snap or {}).get("decision_schema_version") != 1:
+                missing.append("valid reducer-era snapshot v3")
         n = multiball_n(run_dir, snap)
         if n:
             if not within_persona_runs_ok(snap):

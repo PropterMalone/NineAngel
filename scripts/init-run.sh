@@ -61,6 +61,38 @@ mkdir -p "$HANDOFF_DIR"
 PROJECT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo null)"
 printf '%s\n' "$PROJECT_COMMIT" > "$RUN_DIR/PROJECT_COMMIT"
 
+# ADR-20: create the durable metadata channel before any semantic integration.
+# Fields that are only known after pre-flight/selection are explicitly null/empty and
+# atomically completed by record-run-meta.py; the builder rejects an incomplete file.
+python3 - "$RUN_DIR/run-meta.json" "$PROJECT_DIR" <<'PY'
+import datetime, json, os, sys, tempfile
+path, project_dir = sys.argv[1:]
+body = {
+    "version": 1,
+    "integration_pipeline": "semantic-reducer-v1",
+    "status": "building",
+    "run_dir": os.path.dirname(path),
+    "project_dir": os.path.abspath(project_dir),
+    "project": os.path.basename(os.path.abspath(project_dir)) or "unknown",
+    "date": datetime.datetime.now(datetime.timezone.utc).date().isoformat(),
+    "mode": None,
+    "reader_mode": None,
+    "files_reviewed": None,
+    "preflight": None,
+    "multiball": None,
+    "pass_denominators": {},
+    "personas_run": [],
+    "personas_dropped": [],
+    "personas_failed": [],
+    "codebase": {"files": None, "lines": None},
+    "previous_run_dir": None,
+}
+fd, tmp = tempfile.mkstemp(prefix=".run-meta.", dir=os.path.dirname(path), text=True)
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(body, f, indent=2, ensure_ascii=False); f.write("\n")
+os.replace(tmp, path)
+PY
+
 printf "RUN_DIR='%s'\n" "$RUN_DIR"
 printf "ENCODED_CWD='%s'\n" "$ENCODED_CWD"
 printf "HANDOFF_DIR='%s'\n" "$HANDOFF_DIR"

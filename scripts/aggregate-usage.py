@@ -46,7 +46,10 @@ def basename_started_at(run_dir_name):
 
 
 def phase_record(e, keys):
-    return {k: e.get(k) for k in keys}
+    record = {k: e.get(k) for k in keys}
+    if "backend" in e:
+        record["backend"] = e["backend"]
+    return record
 
 
 def aggregate(entries, run_dir, snapshot):
@@ -64,6 +67,13 @@ def aggregate(entries, run_dir, snapshot):
 
     measured = [x["total_tokens"] for x in entries if x.get("total_tokens") is not None]
     total_tokens = sum(measured) if measured else None
+    by_backend = {}
+    for entry in entries:
+        tokens = entry.get("total_tokens")
+        if tokens is None:
+            continue
+        backend = entry.get("backend") or "claude-agent"
+        by_backend[backend] = by_backend.get(backend, 0) + tokens
 
     reader = next((x for x in entries if x.get("phase") == "reader"), None)
     # Pick the last integrator entry that has no STALLED/KILLED note; fall back to
@@ -136,6 +146,7 @@ def aggregate(entries, run_dir, snapshot):
         "ended_at": ended_at,
         "totals": {
             "total_tokens": total_tokens,
+            "by_backend": by_backend,
             "wall_seconds": wall_seconds,
             "reader": phase_record(reader, ("total_tokens", "duration_ms", "tool_uses")) if reader else None,
             "personas": [
@@ -143,7 +154,9 @@ def aggregate(entries, run_dir, snapshot):
                 for x in entries
                 if x.get("phase") == "persona"
             ],
-            "integrator": phase_record(integrator, ("model", "total_tokens", "duration_ms", "tool_uses")) if integrator else None,
+        "integrator": phase_record(integrator, ("model", "total_tokens", "duration_ms", "tool_uses",
+                                                "initial_context_tokens", "peak_context_tokens",
+                                                "request_count")) if integrator else None,
             "reconcilers": [
                 phase_record(x, ("name", "model", "total_tokens", "duration_ms", "tool_uses"))
                 for x in reconciler_entries

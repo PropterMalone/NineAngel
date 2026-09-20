@@ -21,31 +21,10 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # runs as __main__ from any CWD
+from angel_corpus import SNAPSHOT_CANDIDATES, in_scope, load_snapshot, run_date  # noqa: F401
 from persona_aliases import build_persona_aliases, canon_persona
 
-# Snapshot filename drift across run history. First parseable file with a
-# `findings` list wins. The canonical name (post-2026-05-30) is first.
-SNAPSHOT_CANDIDATES = [
-    "findings-snapshot.json",
-    "integrator-snapshot.json",
-    "snapshot.json",
-    "integrator-output.json",
-]
 SEV = ["critical", "important", "minor", "noted"]
-
-
-def load_snapshot(run_dir):
-    for name in SNAPSHOT_CANDIDATES:
-        p = run_dir / name
-        if not p.is_file():
-            continue
-        try:
-            data = json.loads(p.read_text())
-        except Exception:
-            continue
-        if isinstance(data, dict) and isinstance(data.get("findings"), list):
-            return data, name
-    return None, None
 
 
 def load_usage(run_dir):
@@ -70,14 +49,8 @@ def load_dispositions(run_dir):
         return {}
 
 
-def run_date(data, run_dir):
-    d = (data or {}).get("date")
-    if d:
-        return d
-    stem = run_dir.name[:8]
-    if len(stem) == 8 and stem.isdigit():
-        return f"{stem[:4]}-{stem[4:6]}-{stem[6:8]}"
-    return "????-??-??"
+
+
 
 
 def commas(n):
@@ -143,11 +116,11 @@ def main():
             project_display[key] = raw
 
     for d in run_dirs:
-        data, sname = load_snapshot(d)
+        data, sname, _errors = load_snapshot(d)
         if not data:
             continue
         date = run_date(data, d)
-        if args.since and (date.startswith("?") or date < args.since):
+        if args.since and not in_scope(date, args.since):
             continue  # exclude unknown-date runs from a --since window (conservative)
         parsed += 1
         usage = load_usage(d)

@@ -117,8 +117,7 @@ echo "Phase reached : $PHASE"
 if [ -n "$MISSING" ]; then
   echo "First missing : $MISSING"
   echo ""
-  echo "Re-entry point: re-dispatch from the phase that writes the missing artifact."
-  echo "  See SKILL.md §5 (Stage-1 reconcilers) or §8 (finalize-run.sh) for re-entry steps."
+  echo "Re-entry point: $DIR/integrate-run.sh '$RD' --resume"
   exit 1
 fi
 

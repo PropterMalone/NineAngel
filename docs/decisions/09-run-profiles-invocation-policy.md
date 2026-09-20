@@ -9,6 +9,18 @@ commits: []
 
 # Run profiles + invocation policy
 
+> **Amended by ADR-20 (2026-08-30).** Profile selection and milestone invocation remain
+> active, but `--micro` no longer integrates inline. Every profile uses the same bounded
+> reducer pipeline; the small profile saves persona work, not a distinct synthesis route.
+
+> **Amended by ADR-19 (2026-08-26).** Fable is retired, so the "full Fable complement" is now the
+> full **Opus 5** complement, and the standard profile's demotion applies to **`future` only** —
+> `test`'s full-profile destination is Sonnet too, making its half of the exception a no-op. The
+> Fable-rationing rationale (why #4) and its falsifier are retired as unfirable; see ADR-19. The
+> micro profile's inline-integration argument survives but weakens: the dispatch it saves is now
+> an Opus call rather than a pricier Fable one, so inline is a convenience default more than a
+> cost one. The three profiles themselves, and the milestone invocation policy, are untouched.
+
 **Decision**: Three named run profiles — **micro** (`--micro`: adv + hyper, + data-int when signaled; N=2; inline integration), **standard** (default: auto-detected battery, N=2, integrator dispatch, **future/test demoted to Sonnet 5**), **full** (`--full`/`--all`: whole battery, N=3, full Fable complement) — plus a **milestone invocation policy**: standard/full runs happen at pre-merge / pre-ship / public-artifact milestones over accumulated commits; mid-development checks use micro. Profile choice is the maintainer's ex-ante call, never the orchestrator's per-run judgment.
 
 **Why.** Token constraints are the binding pressure (maintainer, 2026-07-08), and the empirical menu resolved cleanly the same day:

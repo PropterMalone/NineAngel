@@ -77,7 +77,7 @@ def test_best_rid():
 
 def test_assemble_core():
     recon = aw._norm_reconciled(RECON, {})
-    wpr, ps, drift = aw.assemble_core(PASSES, recon, 0.5)
+    wpr, ps, bs, drift = aw.assemble_core(PASSES, recon, 0.5)
     # rid stamping
     check(wpr["adv"][0][0]["rid"] == "C1" and wpr["adv"][1][0]["rid"] == "C1", "core: adv both passes rid=C1")
     check(wpr["hyper"][0][0]["rid"] == "C1" and wpr["hyper"][1] == [], "core: hyper p1 rid=C1, p2 empty")
@@ -86,11 +86,45 @@ def test_assemble_core():
     check(ps["C1"] == {"adv": [2, 2], "hyper": [1, 2]}, "core: pass_support C1 adv[2,2] hyper[1,2]", str(ps.get("C1")))
     check(ps["S1"] == {"naive": [1, 2]}, "core: pass_support S1 naive[1,2] (k=1, floored ok)", str(ps.get("S1")))
     check(ps["U1"] == {"test": [2, 2]}, "core: pass_support U1 test[2,2]", str(ps.get("U1")))
-    # severity_drift both directions
+    # severity_drift: these fixtures are all N=2, where ADR-16 leaves no frequency rule
+    # for the audit to disagree with (promotion floors at N>=3, demotion at N>=5).
     dmap = {d["finding_id"]: d["drift"] for d in drift}
-    check(dmap.get("S1") == "singleton-high", "drift: S1 critical singleton -> singleton-high", str(dmap))
-    check(dmap.get("U1") == "unanimous-low", "drift: U1 minor unanimous -> unanimous-low", str(dmap))
+    check("S1" not in dmap, "drift: 1-of-2 critical singleton is not drift at N=2", str(dmap))
+    check("U1" not in dmap, "drift: 2-of-2 unanimous minor is not drift at N=2", str(dmap))
     check("C1" not in dmap, "drift: C1 (2 personas, not unanimous) -> no drift")
+
+
+def _passes(persona, n, present, finding):
+    """n passes for `persona`; `present` = 1-indexed pass numbers carrying `finding`."""
+    return {persona: [{"i": i, "model": "m", "findings": [dict(finding)] if i in present else []}
+                      for i in range(1, n + 1)]}
+
+
+def test_severity_drift_thresholds():
+    """ADR-16: the audit fires only where a frequency rule exists to disagree with."""
+    crit = {"id": "D1", "severity": "critical", "title": "race in writer c",
+            "personas": ["naive"], "file": "c.py", "line": "5"}
+    cf = {"severity": "critical", "title": "race in writer c", "file": "c.py", "line": "5"}
+    recon = aw._norm_reconciled([crit], {})
+    _, _, _, d = aw.assemble_core(_passes("naive", 2, {1}, cf), recon, 0.5)
+    check(d == [], "drift: 1-of-2 Critical is not drift (no demote rule at N=2)", str(d))
+    _, _, _, d = aw.assemble_core(_passes("naive", 3, {1}, cf), recon, 0.5)
+    check(d == [], "drift: 1-of-3 Critical is not drift (demote floors at N>=5)", str(d))
+    _, _, _, d = aw.assemble_core(_passes("naive", 5, {1}, cf), recon, 0.5)
+    check([x["drift"] for x in d] == ["singleton-high"],
+          "drift: 1-of-5 Critical fires singleton-high (demote rule exists there)", str(d))
+
+    minor = {"id": "D2", "severity": "minor", "title": "style nit d",
+             "personas": ["test"], "file": "d.py", "line": "7"}
+    mf = {"severity": "minor", "title": "style nit d", "file": "d.py", "line": "7"}
+    recon = aw._norm_reconciled([minor], {})
+    _, _, _, d = aw.assemble_core(_passes("test", 2, {1, 2}, mf), recon, 0.5)
+    check(d == [], "drift: 2-of-2 Minor is not drift (no promote rule at N=2)", str(d))
+    _, _, _, d = aw.assemble_core(_passes("test", 3, {1}, mf), recon, 0.5)
+    check(d == [], "drift: 1-of-3 Minor is below the true majority", str(d))
+    _, _, _, d = aw.assemble_core(_passes("test", 3, {1, 2}, mf), recon, 0.5)
+    check([x["drift"] for x in d] == ["majority-low"],
+          "drift: 2-of-3 Minor fires majority-low (true majority, left low)", str(d))
 
 
 def test_missing_attribution_floor():
@@ -99,7 +133,7 @@ def test_missing_attribution_floor():
         [{"id": "X1", "severity": "important", "title": "ghost", "personas": ["adv"], "file": "z.py", "line": "1"}], {})
     passes = {"adv": [{"i": 1, "model": None, "findings": [{"severity": "minor", "title": "other", "file": "q.py", "line": "9"}]},
                       {"i": 2, "model": None, "findings": []}]}
-    _, ps, _ = aw.assemble_core(passes, recon, 0.5)
+    _, ps, _, _ = aw.assemble_core(passes, recon, 0.5)
     check(ps.get("X1") == {"adv": [1, 2]}, "floor: attributed-but-unmatched persona -> k=1 (not 0)", str(ps.get("X1")))
 
 
@@ -147,8 +181,42 @@ def test_provenance_roundtrip():
 
 test_best_rid()
 test_assemble_core()
+test_severity_drift_thresholds()
 test_missing_attribution_floor()
 test_single_pass_null()
 test_provenance_roundtrip()
+
+# --- backend provenance (2026-08-26) — the field both falsifiers were blocked on -------
+check(aw.pass_backend("codex", "gpt-5.6-sol") == "codex", "pass_backend: an explicit marker wins")
+check(aw.pass_backend(None, "claude-opus-5[1m]") == "claude",
+      "pass_backend: a Claude model with no marker infers claude")
+check(aw.pass_backend(None, "gpt-5.6-sol") == "unknown",
+      "pass_backend: an unrecognized model is unknown, NOT assumed claude")
+check(aw.pass_backend(None, None) == "unknown", "pass_backend: a missing model is unknown")
+
+_BP = {"rigor": [
+    {"i": 1, "model": "claude-opus-5[1m]", "backend": "claude",
+     "findings": [{"severity": "important", "title": "shared defect", "file": "a.py", "line": "1"}]},
+    {"i": 2, "model": "gpt-5.6-sol", "backend": "codex",
+     "findings": [{"severity": "important", "title": "shared defect", "file": "a.py", "line": "1"},
+                  {"severity": "important", "title": "codex only defect", "file": "b.py", "line": "9"}]},
+]}
+_RECON = aw._norm_reconciled([
+    {"id": "s1", "severity": "important", "title": "shared defect", "file": "a.py", "line": "1",
+     "personas": ["rigor"]},
+    {"id": "c1", "severity": "important", "title": "codex only defect", "file": "b.py", "line": "9",
+     "personas": ["rigor"]},
+], {})
+_w, _ps, _bs, _d = aw.assemble_core(_BP, _RECON, 0.5)
+check(sorted(_bs["s1"]["rigor"]) == ["claude", "codex"],
+      "a finding both backends found records both")
+check(_bs["c1"]["rigor"] == {"codex": 1},
+      "a Codex-only finding records codex and NOT claude")
+check("claude" not in _bs["c1"]["rigor"],
+      "codex-only is machine-detectable — the numerator ADR-18's falsifier lacked")
+check(sorted(_bs) == sorted(_ps), "backend_support keys match pass_support keys")
+check([blk[0]["backend"] for blk in _w["rigor"]] == ["claude", "codex"],
+      "within_persona_runs carries per-pass backend")
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

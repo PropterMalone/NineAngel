@@ -8,6 +8,8 @@ Step 3 model table, reporting:
   - orphan rows   : a row pointing at personas/X.md that doesn't exist
   - row parity    : a short-name in one table but not the other
   - tier drift    : model tier disagrees between SKILL.md and unattended.md
+  - block parity  : a persona's dispatch block documented on one orchestrator
+                    path but not the other
 
 Also enforces the persona frontmatter contract (DESIGN.md "Persona frontmatter
 contract"): required top-level keys (name, default, modes, experimental,
@@ -25,9 +27,65 @@ import re
 import sys
 from pathlib import Path
 
-TIER_RE = re.compile(r"\b(haiku|sonnet|opus|fable)\b", re.I)
+# `haiku` is deliberately absent: ADR-21 (2026-09-12) retired it fleet-wide, so a
+# Haiku row on either path is a drift bug this guard must catch, not a tier.
+TIER_RE = re.compile(r"\b(sonnet|opus|fable)\b", re.I)
 SHORT_RE = re.compile(r"[a-z][a-z-]{1,15}")
 SIGNAL_RE = re.compile(r"`([a-z][a-z_]*)`")
+
+# Personas that cannot be dispatched from their persona file alone: the
+# orchestrator has to compose an extra context block, because the input lives
+# outside the repo (a registry, a rendered artifact) and a subagent never sees
+# invocation flags. That instruction is prose, duplicated in SKILL.md and
+# unattended.md, and it sits outside every table parsed below — so a block added
+# to one path and not the other leaves the persona run-blind on the other, which
+# is worse than not running it. ADR-15 f17; ADR-15 also queues two near-copies of
+# the policy block (claim/legal, minor-data), which is when this will bite.
+DISPATCH_BLOCKS = {
+    "pii": ["<pii_registry>"],
+    "deanon": ["<pii_registry>", "<pii_findings>"],
+    "recip": ["<artifact_paths>"],
+    "caritas": ["<policy_index>", "<artifact_paths>"],
+}
+
+# Personas whose short name appears inside another persona's name/prose as a bare
+# substring would false-match; anchor on non-alphanumeric boundaries instead of \b
+# so backticked (`recip`), possessive (`deanon`'s) and hyphenated (pii-registry)
+# forms all count while "Recipient" does not.
+def _names_persona(para, persona):
+    return re.search(rf"(?<![a-z0-9]){re.escape(persona)}(?![a-z0-9])", para, re.I) is not None
+
+
+def _paragraphs(text):
+    """Blank-line-separated units — the scope one persona's dispatch-block prose occupies."""
+    return re.split(r"\n[ \t]*\n", text)
+
+
+# A dispatch block is referenced in prose as `<tag>` block — the phrasing every
+# persona file and both orchestrator paths already use ("you will receive a
+# <policy_index> block", "append an <artifact_paths> block"). Keying on the bare tag
+# would sweep in <example>, <changes_to_review> and every other markup tag in these
+# files; keying on the following word does not.
+BLOCK_MENTION_RE = re.compile(r"<([a-z][a-z0-9_]*)>`?\s+block\b", re.I)
+
+
+def mentioned_blocks(text):
+    """Dispatch-block tags this document says it receives or composes, as '<tag>' strings."""
+    return {f"<{m.group(1).lower()}>" for m in BLOCK_MENTION_RE.finditer(text)}
+
+
+def block_documented(text, persona, block):
+    """Does this document instruct composing `block` FOR `persona`?
+
+    Persona-scoped on purpose. The original check was a whole-file substring test,
+    which passed vacuously the moment two personas shared a tag: `recip`'s
+    <artifact_paths> prose satisfied the check for `caritas` on a path that never
+    mentioned caritas, so the guard reported clean on the exact drift it was built
+    to catch (ADR-16 review, f1 — reproduced by execution three times). A paragraph
+    is the unit because every one of these instructions is written as one:
+    "When composing the prompt for `X`, append a <block> block ...".
+    """
+    return any(block in para and _names_persona(para, persona) for para in _paragraphs(text))
 
 
 def parse_signals(md_text, section_marker):
@@ -100,7 +158,7 @@ def parse_rows(md_text, source):
         m = TIER_RE.search(cells[-1])
         if not m:
             problems.append(f"{source}: '{short}' has an unrecognized model string ('{cells[-1]}') — "
-                            f"expected a haiku/sonnet/opus/fable tier")
+                            f"expected a sonnet/opus/fable tier (haiku retired 2026-09-12, ADR-21)")
             continue
         rows.append((short, cells[1], m.group(1).lower()))
     return rows, problems
@@ -214,7 +272,50 @@ def main():
     for sig in sorted(unatt_signals - skill_signals):
         signal_problems.append(f"signal parity: '{sig}' present in unattended.md §2.5 but absent from SKILL.md §1.5")
 
-    problems = skill_problems + unatt_problems + signal_problems
+    # Dispatch-block parity: both orchestrator paths must document every block a
+    # persona needs, in prose that names that persona. Presence-only — this cannot
+    # check that the two descriptions agree, just that neither path silently lost one.
+    block_problems = []
+    for persona, blocks in sorted(DISPATCH_BLOCKS.items()):
+        if persona not in {s for s, _f, _t in unatt_rows}:
+            continue  # persona retired; its block requirement retires with it
+        for block in blocks:
+            in_skill = block_documented(skill_text, persona, block)
+            in_unatt = block_documented(unatt_text, persona, block)
+            if in_skill and not in_unatt:
+                block_problems.append(
+                    f"block parity: '{persona}' needs {block}, documented in "
+                    f"SKILL.md but absent from unattended.md")
+            elif in_unatt and not in_skill:
+                block_problems.append(
+                    f"block parity: '{persona}' needs {block}, documented in "
+                    f"unattended.md but absent from SKILL.md")
+            elif not in_skill and not in_unatt:
+                block_problems.append(
+                    f"block parity: '{persona}' needs {block}, documented on "
+                    f"neither orchestrator path")
+
+    # Dispatch-block COVERAGE. The parity loop above iterates DISPATCH_BLOCKS, so a
+    # persona nobody remembered to register is invisible to it no matter what its own
+    # file says — a forgotten registration silently disables parity checking for that
+    # persona, which is the unenforced-memory pattern ADR-15 diagnoses sitting inside
+    # the guard built to close it (ADR-16 review, f7; confirmed by fixture). Derive the
+    # requirement from the persona file instead of trusting the dict: if personas/X.md
+    # tells its leaf to read a <tag> block, something has to compose that block for X,
+    # and the dict must say so before parity can be checked at all.
+    short_of_file = {f: s for s, f in unatt_file.items()}
+    for p in sorted((sd / "personas").glob("*.md")):
+        short = short_of_file.get(p.name)
+        if short is None:
+            continue  # orphan file — reported on its own below
+        declared = set(DISPATCH_BLOCKS.get(short, ()))
+        for block in sorted(mentioned_blocks(p.read_text()) - declared):
+            block_problems.append(
+                f"block coverage: personas/{p.name} reads a {block} block, but "
+                f"DISPATCH_BLOCKS['{short}'] does not list it — register it, or parity "
+                f"for that block is never checked on either orchestrator path")
+
+    problems = skill_problems + unatt_problems + signal_problems + block_problems
 
     for p in sorted((sd / "personas").glob("*.md")):
         problems.extend(check_frontmatter(p))

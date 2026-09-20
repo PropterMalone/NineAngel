@@ -10,6 +10,10 @@ commits: [168ea89, b4cdc57]
 
 # Inline integration owes the same *fields*, not just the same files
 
+> **Mechanism superseded by ADR-20 (2026-08-30).** Inline integration no longer exists on
+> the acting path. The parity requirement survives and is now structural: one deterministic
+> renderer writes the report and snapshot from one validated decisions object.
+
 **Decision**: An inline integration must render the same report **fields** a dispatched integrator does — `integrator.md`'s header block verbatim (including `Files reviewed` and `Pre-flight`), a wall-clock **duration**, the verdict **enum**, and a derived `Effort` rollup — and when it verifies findings inline it must WRITE `$RUN_DIR/verification/{id}.json` per finding before invoking `apply-verification.py`.
 
 **Why**: §5 steps B/C and `--micro` already said "emit every output the integrator owes." Every inline run read that as *files* — report, snapshot, registry block — and then re-invented the header, shedding whatever the prose didn't happen to include. Measured across three consecutive reports (07-21 self-review, 07-28 coach, 07-28 dogfood): `## Verification` absent from **all three**, `Files reviewed` and `Pre-flight` absent, wall reported as "~4 dispatch waves" (not a unit a reader can convert), and one report asserting "5 load-bearing singletons mechanically confirmed" while its own snapshot recorded **8** `CONFIRMED` — an artifact contradicting its own machine record, which is the failure the verify stage (ADR-08) exists to prevent. This is not a rare path: inline is `--micro`'s **default** (ADR-09) and step C's fallback.

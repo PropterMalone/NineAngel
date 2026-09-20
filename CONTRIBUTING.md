@@ -31,7 +31,16 @@ A new persona must:
 
 3. **Be marked `experimental: true` on entry.** Graduation criteria are in `DESIGN.md` (§Experimental personas): ≥5 live runs across diverse projects, false-positive rate <30% per Coach review, no systematic scope violations.
 
+   **The one sanctioned exception: a domain angel** (a persona reviewing against an organization's written rules rather than against craft — ADR-15). It may ship `experimental: false` / `default: yes` when **all** of these hold, and the ADR that introduces it must say so explicitly:
+   - it is gated by a **project-scoped signal** in `requires.any_of` that bounds it to the organization's work, and that signal is exempt from `--all` / `PERSONAS: all` bypass;
+   - a **demotion falsifier** with a numeric threshold and a named, *computable* instrument replaces the proving period the opt-in entry would have provided;
+   - its rules come from a registry it reads at dispatch, not from the prompt, so it is **skipped rather than run blind** when the registry does not resolve.
+
+   The rationale is specific to this class and does not generalize: a domain angel exists because a written rule went unapplied while readable, so a reviewer you have to remember to name is the gate that already failed. Every other persona still enters opt-in. `caritas` is the precedent; ADR-15 queues claim/legal and minor-data on the same terms.
+
 4. **Add a row** to the SKILL.md (§1) and unattended.md (Step 3) mapping tables — short name, persona file, model assignment.
+
+   If the persona needs an orchestrator-composed context block — input that lives outside the repo, like a registry or a rendered artifact — document it on **both** paths and add it to `DISPATCH_BLOCKS` in `scripts/validate-personas.py`. That prose sits outside every mapping table, so nothing else catches a block added to one orchestrator and not the other, and the persona runs blind on the path that lost it.
 
 5. **Update DESIGN.md** §Personas with a one-paragraph description and the persona's required signals.
 

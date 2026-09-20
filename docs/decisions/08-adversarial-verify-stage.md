@@ -9,6 +9,14 @@ commits: []
 
 # Adversarial verification stage (§5.7)
 
+> **Amended by ADR-19 (2026-08-26).** The verifier tier changes: Criticals now run
+> `claude-opus-5[1m]` rather than Fable[1m]; Sonnet 5[1m] otherwise is unchanged. Note the
+> downstream coupling — this stage's output is the measurement substrate ADR-16's live falsifier
+> reads (`scripts/pass-support-accuracy.py` counts REFUTED verdicts and `severity_opinion`), so a
+> change of verifier model is a change of instrument. ADR-16's baselines were accumulated on Fable
+> verifiers; a shift in its rates after this date has a candidate explanation that is not the
+> hypothesis under test.
+
 **Decision**: Add a default-ON verification stage after the integrator. The integrator (Phase 3.5) queues up to 8 findings — every Critical, singleton sub-`cited-spec` Importants, and all consistency-shaped C/I claims — and the orchestrator dispatches one **verifier** subagent per entry (`verifier.md`: refute-first mandate, run-it-preferred, read-only). Verdicts (`CONFIRMED`/`PLAUSIBLE`/`REFUTED`) are applied mechanically (`scripts/apply-verification.py`): CONFIRMED anchors a Critical regardless of corroboration; REFUTED findings stay in the snapshot as calibration data but are excluded from fix batches and surfaced first in a `## Verification` report section. `--no-verify` skips.
 
 **Why.** Three converging lines of evidence, all from 2026-07-08 and the leg 1–3 evals:

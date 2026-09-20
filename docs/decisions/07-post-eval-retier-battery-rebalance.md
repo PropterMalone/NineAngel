@@ -8,6 +8,16 @@ commits: [fc1a14c, 0cd4363, 9e07cc6]
 
 # Post-eval model retier + battery rebalance
 
+> **Amended by ADR-19 (2026-08-26).** Part **(1) is superseded**: Fable is retired from the
+> battery and its lanes run `claude-opus-5[1m]`; Test returns to Sonnet, which is the reversion
+> this ADR's own promotion falsifier prescribed, taken on cost grounds rather than on the
+> acceptance evidence that clause asked for. Part **(2) is promoted from conditional to
+> standing** — the *Fable-lapse* ladder is now simply the table, since there is no availability
+> check left to perform. Part (3)'s contract-tracing principle survives, but the tier it names is
+> now a lower one: the ~87–90% strict-recall row is gone and the battery runs on the ~70% row.
+> Parts (4)–(8) stand unchanged; (8) in particular is load-bearing for detecting whether the
+> retirement actually took effect at dispatch time. Falsifier dispositions are in ADR-19.
+
 **Decision**: Apply the frozen post-leg-3 batch. (1) Future-Me and Test promote to the top tier (`claude-fable-5[1m]`); Data-Integrity and Thousand-Foot stay there; Hypercritical deliberately stays Sonnet. (2) A **Fable-lapse ladder** is documented in SKILL.md §1: top lanes demote to `claude-opus-4-8[1m]` — except Test, which reverts to Sonnet — and multiball N=2 is kept on Opus lanes. (3) The tier-by-lane principle is reframed as **contract-tracing depth**. (4) Freshness demotes to `opt-in`; Test/Performance/User lose their near-universal gate signals (`package_json` / `runtime_code` / `readme`). (5) Sonnet personas pin explicit `claude-sonnet-5[1m]` instead of the tier alias. (6) Verdict becomes a strict 4-value enum. (7) Cross-file consistency claims get the run-it-first evidence bar in every severity-calibration block. (8) Per-run model verification (`requested=|ran=`) is standing methodology.
 
 **Evidence base** — three eval legs, reports in `~/.claude/projects/-home-user-.claude-skills-angel/memory/`:

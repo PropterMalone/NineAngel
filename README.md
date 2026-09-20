@@ -21,7 +21,7 @@ Running 8 personas in parallel on the current diff...
 Verdict: CHANGES REQUIRED
 ```
 
-Each persona is an independent subagent. None of them sees the others' findings until the Integrator reconciles them. The Integrator deduplicates, ranks by severity × consensus × effort, and renders a verdict.
+Each persona is an independent subagent. None sees the others' findings. A bounded semantic reducer later receives only a mechanically derived JSON workset, returns schema-constrained decisions, and a deterministic renderer produces the report and verdict.
 
 ## The personas
 
@@ -44,6 +44,9 @@ NineAngel auto-detects which personas are relevant to your project from signals 
 | `coach`    | prompt files (personas, skills)       | Reviews agent prompts — alignment + execution                                   |
 | `editor`   | prose artifacts                       | Prose quality — clarity, structure, tone, wasted words in docs/READMEs/ADRs    |
 | `rigor`    | prose artifacts                       | Analytical rigour — unsupported claims, vague hedges, missing falsifiers        |
+| `caritas`  | Caritas client work (`caritas_project`) | Domain angel — reviews against an **organization's written policy**, not craft: data isolation, delivery channel, engagement posture, attribution |
+
+`caritas` is the one default-yes persona whose signal is **not** bypassed by `--all` / `PERSONAS: all`, and the only one that is skipped rather than dispatched when its input — a policy registry outside the project — does not resolve. A policy reviewer improvising rules carries the authority of a rule that does not exist, so running it blind is worse than not running it. See ADR-15.
 
 **Opt-in** (named explicitly):
 
@@ -89,7 +92,7 @@ Without `--artifact` it looks for committed outputs (`examples/`, `fixtures/`, `
 /angel --cross                # cross-model second opinion (default-ON for interactive; --no-cross to suppress)
 /angel --no-cross             # suppress the default cross-model leg (§5.6)
 /angel --no-verify            # skip the adversarial verification stage (§5.7; default ON when verify_queue is non-empty)
-/angel --model-override <tier># force all personas to one tier (haiku|sonnet|opus|fable); integrator unaffected (SKILL.md §5)
+/angel --model-override <tier># force all personas to one tier (sonnet|opus|fable; haiku retired by ADR-21); integrator unaffected (SKILL.md §5)
 /angel --reader               # enable the Bundle Reader (permanently default-off per ADR-01 — calibration showed no upside)
 /angel --fix-last             # apply the last review's fix batch in this project
 /angel <project-name>         # cd into the named project, then review it
@@ -110,14 +113,14 @@ Restart Claude Code. To verify the install: type `/help` in Claude Code; `/angel
 
 **Requirements:** Claude Code 2.x or later (`claude --version` to check). Personas dispatch via the Agent tool, so the harness must support sub-agents.
 
-**Platform support:** Linux and macOS. Windows users with Claude Code installed should substitute the install path for the Windows equivalent (`%USERPROFILE%\.claude\skills\angel`); some shell-derived paths in the orchestrator (e.g., `pwd | sed 's|/|-|g'`) assume POSIX shell behavior. Untested on Windows.
+**Platform support:** Linux and macOS for the review battery. Semantic integration additionally requires Codex CLI signed in with ChatGPT and a successful local runner qualification. The reducer uses the ChatGPT/Codex subscription allowance; it never uses an OpenAI API key. Set `ANGEL_REDUCER_BACKEND=disabled` to force the visible deterministic-union fallback. Windows users with Claude Code installed should substitute the install path for the Windows equivalent (`%USERPROFILE%\.claude\skills\angel`); some shell-derived paths in the orchestrator (e.g., `pwd | sed 's|/|-|g'`) assume POSIX shell behavior. Untested on Windows.
 
 ## How it works
 
 1. **Battery selection.** The orchestrator scans the project tree for signals (file types, configs, deps) and selects the personas whose triggers match. Named personas bypass detection; `--all` runs everything default-yes.
 2. **Pre-flight gate.** Before any persona runs, Claude Code runs the project's tests, build, and linter (if configured). A red gate aborts the review — no point reviewing code that doesn't compile.
-3. **Parallel dispatch.** Each selected persona runs as an independent Agent-tool subagent on its own model tier (Haiku / Sonnet / Opus depending on workload). None see the others' findings. The project's CLAUDE.md and diff are wrapped in untrusted-content envelopes so prompt-injection attempts in reviewed code surface as findings rather than altering persona behavior.
-4. **Integration.** The Integrator (model selected via a size-dependent ladder — Fable[1m] when available, else Opus[1m], else inline; see `docs/decisions/04`) collects raw outputs, sanitizes them, deduplicates cross-persona overlap, ranks by severity × consensus × effort, renders a Top 5, and produces a verdict: APPROVED / APPROVED (with suggestions) / CHANGES RECOMMENDED / CHANGES REQUIRED.
+3. **Parallel dispatch.** Each selected persona runs as an independent Agent-tool subagent on its own model tier (Sonnet / Opus depending on workload; Haiku retired by ADR-21). None see the others' findings. The project's CLAUDE.md and diff are wrapped in untrusted-content envelopes so prompt-injection attempts in reviewed code surface as findings rather than altering persona behavior.
+4. **Integration.** Scripts parse the durable Markdown into a lossless, lineage-bearing workset. A qualified, fail-closed Codex process authenticated through ChatGPT makes only semantic merge/rank decisions; local execution hosts are disabled and executable tool events are rejected. Deterministic code validates total candidate accounting and renders both report and snapshot. Oversized inputs are sharded below a 24k estimated-input cap. If qualification or the reducer is unavailable, every candidate remains visible in an explicitly degraded deterministic-union report—there is no inline synthesis fallback (ADR-20).
 5. **Optional loop.** With `--loop`, fixes are dispatched to a coding subagent and the battery re-runs (max 3 cycles). Line-level findings converge fast; architectural findings ("wrong abstraction") often persist and need human attention.
 6. **Per-project handoff.** A handoff file (review summary + ranked findings) and a machine-consumable fix-batch are written to `~/.claude/projects/{encoded-cwd}/memory/`. `/angel --fix-last` (later, in the same project directory) dispatches the fix-batch to a coding subagent.
 
@@ -144,6 +147,8 @@ Support tooling in `scripts/` (each script's header docstring is authoritative):
 - `recurrence-pilot.py` — cross-run finding-recurrence pilot: a no-new-logging outcome proxy (source of the ~40% Important+ reproducibility number).
 - `validate-personas.py` — drift guard: diffs `personas/*.md` against the SKILL.md §1 and unattended.md Step 3 model tables; exits nonzero on drift.
 - `init-run.sh` / `record-dispatch.sh` / `aggregate-usage.py` / `finalize-run.sh` — the run-lifecycle mechanisms: `init-run.sh` creates the run substrate (`eval "$(init-run.sh [PROJECT_DIR])"` sets `RUN_DIR`/`ENCODED_CWD`/`HANDOFF_DIR`); `record-dispatch.sh` appends each dispatch's `usage.jsonl` line and findings file; `aggregate-usage.py` rolls `usage.jsonl` into `usage.json`; `finalize-run.sh <RUN_DIR> [RUN_TAG]` is the single end-of-run gate (assemble-wpr → aggregate → completeness gate → usage.log append → dispositions skeleton; ADR-12 — the append is deliberately AFTER the gate, so a gate failure suppresses the line instead of duplicating it).
+- `record-run-meta.py` / `integrate-run.sh` — complete reducer-era metadata, then run the bounded build → isolated semantic reduction → validation → deterministic rendering → finalization pipeline. `probe-integration-runner.sh` qualifies the exact ChatGPT-authenticated Codex installation and its no-tools boundary before semantic use.
+- `score-jev-reconciliation.py` / `jev-reconciliation-eval.py` — ADR-22's disclosure-gated, shadow-only duplicate scorer and private evidence workflow. The evaluator pre-registers five blind calibration runs, freezes a threshold, registers ten consecutive holdouts, runs isolated alternate reducers, prepares score-blind adjudication, and evaluates all five promotion clauses. It refuses to write private results inside any git repository.
 - `append-usage-log.sh` — internal: generates the canonical usage.log line; called by `finalize-run.sh`, never hand-formatted.
 - `finalize-calibration.py` — internal/retired: paired baseline+reader A/B markers for the concluded reader calibration (ADR-01).
 - `test_scripts.sh` — smoke tests pinning the script contracts. Run `bash scripts/test_scripts.sh`.
@@ -155,6 +160,8 @@ NineAngel has a few out-of-repo dependencies. Missing ones degrade gracefully (t
 | Dependency | Used by | If absent |
 |---|---|---|
 | `bash`, `git`, `python3`, `jq` | core scripts (`init-run.sh`, `finalize-run.sh`, `record-dispatch.sh`) | hard failure — required |
+| Codex CLI signed in with ChatGPT | tool-disabled structured-output reducer (ADR-20) | deterministic-union report with `no-qualified-runner` banner; API-key auth is rejected and API-key environment variables are scrubbed |
+| `~/.claude/skills/jev/scripts/jev-client.mjs` | ADR-22 eligible N=2 shadows only | shadow scoring stops before an artifact is written; Sonnet acting reconciliation is unchanged |
 | `~/.claude/scripts/xreview.py` | cross-model leg (§5.6, default-ON interactive) | run logs `cross: failed (xreview.py not found)` — leg skipped, review continues |
 | backends `agy` / `codex` | xreview.py routing | xreview.py handles its own backend routing; a missing backend logs `cross: failed ({reason})` |
 | `/code` skill (Claude Code) | `--fix-last` and `--loop` fix dispatch | fallback: dispatch any coding subagent with the same preamble from `angel-fix-batch.md`; the fix-batch file is always written and human-readable |
@@ -163,7 +170,7 @@ NineAngel has a few out-of-repo dependencies. Missing ones degrade gracefully (t
 
 ## Status
 
-Personal tool, used in production by the author. Stable enough to rely on; the persona roster evolves as new failure modes are encountered. Personas marked `experimental` in their frontmatter (currently `penny`, `pii`, `deanon`, and `heir`) are excluded from the auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria. (`blindspot` graduated to the default battery in the 2026-06-06 swap with `thousand`; `editor` and `rigor` added 2026-07.)
+Personal tool, used in production by the author. The review battery is operational; semantic integration is admitted only after the host-specific probe succeeds, and otherwise degrades visibly to a bounded report plus a lossless machine ledger. The persona roster evolves as new failure modes are encountered. Personas marked `experimental` in their frontmatter (currently `penny`, `pii`, `deanon`, and `heir`) are excluded from the auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria. (`blindspot` graduated to the default battery in the 2026-06-06 swap with `thousand`; `editor` and `rigor` added 2026-07.)
 
 ## License
 

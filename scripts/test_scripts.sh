@@ -84,10 +84,16 @@ vp_fixture "$VP" $'| adv | Adversarial | Sonnet 4.6 |\n| ghost | Ghost | Sonnet 
 rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$VP" 2>&1)" || rc=$?
 rc_is $rc 1 "orphan table row (no persona file) exits nonzero"
 has "orphan row" "$vout" "orphan row named in output"
-vp_fixture "$VP" '| adv | Adversarial | Sonnet 4.6 |' '| adv | `adversarial.md` | `claude-haiku-4-5` |'
+# opus vs sonnet, not haiku: haiku is no longer a recognized tier (ADR-21), so a
+# haiku id here would trip the unrecognized-model check before the drift check.
+vp_fixture "$VP" '| adv | Adversarial | Sonnet 4.6 |' '| adv | `adversarial.md` | `claude-opus-4-6` |'
 rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$VP" 2>&1)" || rc=$?
 rc_is $rc 1 "tier mismatch between SKILL and unattended exits nonzero"
 has "tier drift" "$vout" "tier drift named in output"
+vp_fixture "$VP" '| adv | Adversarial | Sonnet 4.6 |' '| adv | `adversarial.md` | `claude-haiku-4-5` |'
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$VP" 2>&1)" || rc=$?
+rc_is $rc 1 "haiku row in a model table exits nonzero (ADR-21)"
+has "haiku retired" "$vout" "haiku retirement named in output"
 vp_fixture "$VP" '| adv | Adversarial | GPT-9000 |' '| adv | `adversarial.md` | `gpt-9000` |'
 rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$VP" 2>&1)" || rc=$?
 rc_is $rc 1 "unrecognized model string exits nonzero (TIER_RE blind spot)"
@@ -163,6 +169,107 @@ MD
 rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp4" 2>&1)" || rc=$?
 rc_is $rc 1 "signal parity: prose_artifacts in SKILL but not unattended exits nonzero"
 has "prose_artifacts" "$vout" "signal parity: missing signal named in output"
+
+# Dispatch-block parity (ADR-15 f17). A persona needing an orchestrator-composed
+# context block must have it documented on BOTH paths; a block on one path only
+# leaves that persona run-blind on the other. These fixtures prove the check
+# fires rather than passing vacuously on the live tree.
+vp5="$TMP/vp5"; rm -rf "$vp5"; mkdir -p "$vp5/personas"
+mk_persona "$vp5/personas/recipient.md"
+cat > "$vp5/SKILL.md" <<'MD'
+# fixture
+
+| Short | Full | Model |
+|---|---|---|
+| recip | Recipient | Fable 5 |
+
+Compose an <artifact_paths> block for recip before dispatching.
+MD
+cat > "$vp5/unattended.md" <<'MD'
+# fixture
+
+## Step 3: Dispatch personas
+
+| Short | Persona file | Model |
+|-------|-------------|-------|
+| recip | `recipient.md` | `claude-fable-5` |
+MD
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp5" 2>&1)" || rc=$?
+rc_is $rc 1 "block parity: recip's artifact_paths in SKILL but not unattended exits nonzero"
+has "artifact_paths" "$vout" "block parity: missing block named in output"
+has "recip" "$vout" "block parity: owning persona named in output"
+
+# Same fixture, block now documented on both paths -> clean.
+printf 'Compose an <artifact_paths> block for recip before dispatching.\n' >> "$vp5/unattended.md"
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp5" 2>&1)" || rc=$?
+rc_is $rc 0 "block parity: block on both paths is clean"
+
+# Shared-tag fixture (ADR-16 review, f1). recip and caritas both need
+# <artifact_paths>. unattended.md documents it for recip only, so caritas is
+# run-blind there — but the tag is present in the file, which is all the old
+# whole-file substring test asked. This fixture reports clean on the pre-fix
+# validator and must fire now.
+vp7="$TMP/vp7"; rm -rf "$vp7"; mkdir -p "$vp7/personas"
+mk_persona "$vp7/personas/recipient.md"
+mk_persona "$vp7/personas/caritas.md"
+cat > "$vp7/SKILL.md" <<'MD'
+# fixture
+
+| Short | Full | Model |
+|---|---|---|
+| recip | Recipient | Fable 5 |
+| caritas | Caritas | Fable 5 |
+
+When composing the prompt for recip, append an <artifact_paths> block.
+
+When composing the prompt for caritas, append a <policy_index> block.
+
+caritas also receives an <artifact_paths> block when artifacts are supplied.
+MD
+cat > "$vp7/unattended.md" <<'MD'
+# fixture
+
+## Step 3: Dispatch personas
+
+| Short | Persona file | Model |
+|-------|-------------|-------|
+| recip | `recipient.md` | `claude-fable-5` |
+| caritas | `caritas.md` | `claude-fable-5` |
+
+When composing the prompt for recip, append an <artifact_paths> block.
+
+When composing the prompt for caritas, append a <policy_index> block.
+MD
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp7" 2>&1)" || rc=$?
+rc_is $rc 1 "block parity: shared tag documented for recip only exits nonzero"
+has "'caritas' needs <artifact_paths>" "$vout" "block parity: unscoped-tag drift names caritas, not recip"
+# Documenting it for caritas too on the unattended path clears it.
+printf '\ncaritas also receives an <artifact_paths> block when artifacts are supplied.\n' >> "$vp7/unattended.md"
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp7" 2>&1)" || rc=$?
+rc_is $rc 0 "block parity: shared tag documented for both personas is clean"
+
+# Coverage fixture (ADR-16 review, f7). A persona whose own file tells its leaf to
+# read an orchestrator-composed block, but which was never added to DISPATCH_BLOCKS.
+# The parity loop only iterates the dict, so the pre-fix validator reports clean and
+# that persona's block is unchecked on both paths forever.
+vp8="$TMP/vp8"; vp_fixture "$vp8" '| adv | Adversarial | Sonnet 4.6 |' '| adv | `adversarial.md` | `claude-sonnet-4-6` |'
+mk_persona "$vp8/personas/adversarial.md"
+printf '\nYou will receive a <ghost_registry> block carrying absolute paths. Read it first.\n' >> "$vp8/personas/adversarial.md"
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp8" 2>&1)" || rc=$?
+rc_is $rc 1 "block coverage: unregistered block in a persona file exits nonzero"
+has "block coverage" "$vout" "block coverage: the unregistered block is named"
+has "ghost_registry" "$vout" "block coverage: names the tag the persona reads"
+# An <example>-style markup tag is not a dispatch block and must not fire.
+mk_persona "$vp8/personas/adversarial.md"
+printf '\nSee <example> for the shape of a good finding.\n' >> "$vp8/personas/adversarial.md"
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp8" 2>&1)" || rc=$?
+rc_is $rc 0 "block coverage: a non-block markup tag does not fire"
+
+# A persona absent from the roster carries no block requirement (retirement).
+vp6="$TMP/vp6"; vp_fixture "$vp6" '| adv | Adversarial | Sonnet 4.6 |' '| adv | `adversarial.md` | `claude-sonnet-4-6` |'
+mk_persona "$vp6/personas/adversarial.md"
+rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp6" 2>&1)" || rc=$?
+rc_is $rc 0 "block parity: retired persona's block requirement retires with it"
 
 echo "== append-usage-log.sh =="
 RD="$ANGEL_RUNS_ROOT/r_full"; mk_usage "$RD" 110000
@@ -469,6 +576,7 @@ assert j["total_tokens"] == 50000, j
 assert j["tool_uses"] == 10, j
 assert j["duration_ms"] == 60000, j
 assert j["reader_pack"] == False, j
+assert "backend" not in j, j
 ISO_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
 assert ISO_RE.match(j["ended_at"]), f"ended_at not ISO-8601: {j['ended_at']}"
 assert ISO_RE.match(j["started_at"]), f"started_at not ISO-8601: {j['started_at']}"
@@ -481,6 +589,10 @@ assert json.loads(last) == j, last
 print("rd-asserts-ok")
 PY
 rc_is $rc 0 "record-dispatch appends a schema-correct JSONL line"
+rdbackend="$("$DIR/record-dispatch.sh" --backend codex "$RRD" persona adv gpt-5.6-sol 1234 null 50 </dev/null)"
+has '"backend":"codex"' "$rdbackend" "--backend lands on the JSONL line"
+rdlegacy="$("$DIR/record-dispatch.sh" "$RRD" persona adv gpt-5.6-sol 1234 null 50 </dev/null)"
+hasnt '"backend"' "$rdlegacy" "omitted --backend leaves the field absent"
 # null-duration dispatch: started_at must be null, ended_at must be ISO-8601
 rdnull="$("$DIR/record-dispatch.sh" "$RRD" persona rtfm claude-sonnet-4-6 null null null </dev/null)"
 rc=0; python3 - "$rdnull" <<'PY' || rc=$?
@@ -546,6 +658,119 @@ printf '{"id":"C1","verdict":"CONFIRMED"}' | "$DIR/record-dispatch.sh" --verdict
 [ -f "$RRD2/verification/C1.json" ] && ok "--verdict writes verification/C1.json (mixed-case id)" || bad "--verdict writes verification/C1.json (mixed-case id)"
 rc=0; printf 'not json' | "$DIR/record-dispatch.sh" --verdict "$RRD2" verifier C2 m null null null >/dev/null 2>&1 || rc=$?
 rc_is $rc 1 "--verdict rejects a non-JSON payload"
+
+echo "== dispatch-leg.sh =="
+CODEX_SHIM="$TMP/codex-shim"; mkdir -p "$CODEX_SHIM"
+cat > "$CODEX_SHIM/codex" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "exec" ]]
+printf '%s' "${!#}" > "$CODEX_ARG_CAPTURE"
+cat > "$CODEX_STDIN_CAPTURE"
+printf '%s\n' \
+  'OpenAI Codex stub' \
+  'model: gpt-5.6-sol' \
+  'codex' \
+  '## [Adversarial] Review' \
+  '#### Important' \
+  '- **stub finding** `[trivial]` — `stub.py:1` — exercised' \
+  'tokens used' \
+  '12,345'
+SH
+chmod +x "$CODEX_SHIM/codex"
+RDL="$ANGEL_RUNS_ROOT/r_dispatch_leg"; mkdir -p "$RDL"
+PROMPT_EXPECTED="$TMP/dispatch-prompt.expected"
+PROMPT_ACTUAL="$TMP/dispatch-prompt.actual"
+PROMPT_ARG="$TMP/dispatch-prompt.arg"
+printf 'review this prompt\nwith a second line and no trailing newline' > "$PROMPT_EXPECTED"
+rc=0; dlout="$(CODEX_BIN="$CODEX_SHIM/codex" CODEX_STDIN_CAPTURE="$PROMPT_ACTUAL" \
+  CODEX_ARG_CAPTURE="$PROMPT_ARG" "$DIR/dispatch-leg.sh" \
+  --run-dir "$RDL" --phase persona --name adv --model gpt-5.6-sol --pass 1 --findings \
+  < "$PROMPT_EXPECTED" 2>&1)" || rc=$?
+rc_is $rc 0 "dispatch-leg succeeds through a CODEX_BIN-shimmed codex"
+[ "$(cat "$PROMPT_ARG")" = "-" ] && ok "dispatch-leg passes - as codex's prompt argument" || bad "dispatch-leg passes - as codex's prompt argument"
+cmp -s "$PROMPT_EXPECTED" "$PROMPT_ACTUAL" && ok "dispatch-leg feeds the full prompt to codex on stdin" || bad "dispatch-leg feeds the full prompt to codex on stdin"
+rc=0; python3 - "$RDL" <<'PY' || rc=$?
+import json, sys
+rd = sys.argv[1]
+lines = [json.loads(x) for x in open(rd + "/usage.jsonl") if x.strip()]
+assert len(lines) == 1, lines
+line = lines[0]
+assert line["total_tokens"] == 12345, line
+assert line["backend"] == "codex", line
+assert line["model"] == "gpt-5.6-sol", line
+assert "requested=gpt-5.6-sol|ran=gpt-5.6-sol" in line["note"], line
+print("dispatch-leg-ok")
+PY
+rc_is $rc 0 "dispatch-leg records tokens, codex backend, and requested/ran model"
+[ -f "$RDL/passes/adv-p1.md" ] && ok "dispatch-leg writes the pass through record-dispatch" || bad "dispatch-leg writes the pass through record-dispatch"
+[ -f "$RDL/findings/adv.md" ] && ok "dispatch-leg passes --findings through to record-dispatch" || bad "dispatch-leg passes --findings through to record-dispatch"
+
+cat > "$CODEX_SHIM/codex" <<'SH'
+#!/usr/bin/env bash
+touch "$CODEX_INVOKED"
+exit 99
+SH
+chmod +x "$CODEX_SHIM/codex"
+RDLP="$ANGEL_RUNS_ROOT/r_dispatch_leg_preflight"; mkdir -p "$RDLP"
+CODEX_INVOKED="$TMP/codex-invoked"
+rc=0; dlpout="$(printf 'must not dispatch\n' | CODEX_BIN="$CODEX_SHIM/codex" CODEX_INVOKED="$CODEX_INVOKED" \
+  "$DIR/dispatch-leg.sh" --run-dir "$RDLP" --phase persona --name adv --model gpt-5.6-sol \
+  --pass 2 --findings 2>&1)" || rc=$?
+rc_is $rc 1 "dispatch-leg rejects --findings with --pass 2 during preflight"
+[ ! -e "$CODEX_INVOKED" ] && ok "dispatch-leg preflight rejection does not invoke codex" || bad "dispatch-leg preflight rejection does not invoke codex"
+has "--findings only composes with --pass 1" "$dlpout" "dispatch-leg preflight rejection explains the invalid composition"
+
+cat > "$CODEX_SHIM/codex" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '%s\n' \
+  'OpenAI Codex stub' \
+  'model: gpt-5.6-sol' \
+  'codex' \
+  '#### Important' \
+  '- **preserve me** `[trivial]` — `stub.py:2` — record rejection fixture' \
+  'tokens used' \
+  '234'
+SH
+chmod +x "$CODEX_SHIM/codex"
+RDLR="$ANGEL_RUNS_ROOT/r_dispatch_leg_rejected"; mkdir -p "$RDLR"; printf '2\n' > "$RDLR/MULTIBALL"
+rc=0; dlrout="$(printf 'review this prompt\n' | CODEX_BIN="$CODEX_SHIM/codex" "$DIR/dispatch-leg.sh" \
+  --run-dir "$RDLR" --phase persona --name adv --model gpt-5.6-sol 2>&1)" || rc=$?
+rc_is $rc 1 "dispatch-leg exits nonzero when record-dispatch rejects its output"
+rejected_output="$(find "$RDLR/tmp" -maxdepth 1 -type f -name 'rejected-adv-*.out' -print -quit)"
+[ -n "$rejected_output" ] && grep -q 'preserve me' "$rejected_output" \
+  && ok "dispatch-leg preserves codex output rejected by record-dispatch" || bad "dispatch-leg preserves codex output rejected by record-dispatch"
+has "$rejected_output" "$dlrout" "dispatch-leg prints the preserved output path"
+
+cat > "$CODEX_SHIM/codex" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '%s\n' 'partial output before timeout'
+exec sleep 5
+SH
+chmod +x "$CODEX_SHIM/codex"
+RDLT="$ANGEL_RUNS_ROOT/r_dispatch_leg_timeout"; mkdir -p "$RDLT"
+rc=0; dltout="$(printf 'review this prompt\n' | CODEX_BIN="$CODEX_SHIM/codex" DISPATCH_TIMEOUT_S=0.1 \
+  "$DIR/dispatch-leg.sh" --run-dir "$RDLT" --phase persona --name adv --model gpt-5.6-sol --pass 1 2>&1)" || rc=$?
+rc_is $rc 1 "dispatch-leg timeout path exits nonzero"
+has "timed out after 0.1s" "$dltout" "dispatch-leg timeout path has a distinct error"
+has "~/.codex/sessions" "$dltout" "dispatch-leg timeout error names the rollout-recovery path"
+
+cat > "$CODEX_SHIM/codex" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' 'garbage output with no final block or meter'
+exit 0
+SH
+chmod +x "$CODEX_SHIM/codex"
+RDLF="$ANGEL_RUNS_ROOT/r_dispatch_leg_failed"; mkdir -p "$RDLF"
+rc=0; printf 'review this prompt\n' | CODEX_BIN="$CODEX_SHIM/codex" "$DIR/dispatch-leg.sh" \
+  --run-dir "$RDLF" --phase persona --name adv --model gpt-5.6-sol --pass 1 \
+  >/dev/null 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && ok "dispatch-leg garbage-output path exits nonzero" || bad "dispatch-leg garbage-output path exits nonzero"
+grep -qE 'angel-pass persona=adv pass=1 model=gpt-5.6-sol( backend=codex)? failed' "$RDLF/passes/adv-p1.md" \
+  && ok "dispatch-leg garbage-output path records --failed" || bad "dispatch-leg garbage-output path records --failed"
+has '"backend":"codex"' "$(tail -1 "$RDLF/usage.jsonl")" "dispatch-leg failure line retains codex backend"
 
 echo "== init-run.sh =="
 SYNTH_PROJ="$TMP/proj"; mkdir -p "$SYNTH_PROJ"
@@ -636,6 +861,26 @@ print("aggregate-asserts-ok")
 PY
 rc_is $rc 0 "aggregate-usage: totals/unmeasured/integrator/verdict/findings correct"
 grep -q "persona:adv" "$RAG/UNMEASURED.md" && ok "UNMEASURED.md written with unmeasured entry" || bad "UNMEASURED.md written with unmeasured entry"
+# Mixed-backend entries retain the legacy all-entry total while also exposing
+# backend-partitioned measured totals. A missing backend means claude-agent.
+RAG_MIX="$ANGEL_RUNS_ROOT/20260601T121000Z-mixed"; mkdir -p "$RAG_MIX/findings"
+cat > "$RAG_MIX/usage.jsonl" <<'JSONL'
+{"phase":"persona","name":"adv","model":"claude-sonnet-5","total_tokens":10000,"tool_uses":2,"duration_ms":1000,"reader_pack":false}
+{"phase":"persona","name":"hyper","model":"gpt-5.6-sol","total_tokens":90000,"tool_uses":null,"duration_ms":2000,"reader_pack":false,"backend":"codex"}
+JSONL
+rc=0; python3 "$DIR/aggregate-usage.py" "$RAG_MIX" >/dev/null 2>&1 || rc=$?
+rc_is $rc 0 "aggregate-usage exits 0 on a mixed-backend fixture"
+rc=0; python3 - "$RAG_MIX" <<'PY' || rc=$?
+import json, sys
+u = json.load(open(sys.argv[1] + "/usage.json"))
+assert u["totals"]["total_tokens"] == 100000, u["totals"]
+assert u["totals"]["by_backend"] == {"claude-agent": 10000, "codex": 90000}, u["totals"]
+personas = {x["name"]: x for x in u["totals"]["personas"]}
+assert "backend" not in personas["adv"], personas["adv"]
+assert personas["hyper"]["backend"] == "codex", personas["hyper"]
+print("mixed-backend-ok")
+PY
+rc_is $rc 0 "aggregate-usage partitions backend totals and preserves per-entry backend"
 # f34: project_commit from PROJECT_COMMIT file must appear in usage.json.
 RAG_PC="$ANGEL_RUNS_ROOT/20260601T121500Z-pc1"; mkdir -p "$RAG_PC/findings"; echo "stub" > "$RAG_PC/findings/rtfm.md"
 cp "$RAG/usage.jsonl" "$RAG_PC/usage.jsonl"; cp "$RAG/findings-snapshot.json" "$RAG_PC/findings-snapshot.json"
@@ -1088,9 +1333,54 @@ rc=0; python3 "$DIR/test_assemble_wpr.py" || rc=$?
 rc_is $rc 0 "assemble-wpr suite passes"
 
 echo
+echo "--- ADR/SKILL.md consistency gate (test_adr_consistency.py) ---"
+rc=0; python3 "$DIR/test_adr_consistency.py" || rc=$?
+rc_is $rc 0 "adr-consistency suite passes"
+
+echo
+echo "--- codex leg dispatcher suite (test_dispatch_leg.sh) ---"
+rc=0; bash "$DIR/test_dispatch_leg.sh" || rc=$?
+rc_is $rc 0 "dispatch-leg suite passes"
+
+echo
 echo "--- true-cost per-request collapse suite (test_true_cost.py) ---"
 rc=0; python3 "$DIR/test_true_cost.py" || rc=$?
 rc_is $rc 0 "true-cost suite passes"
+
+echo
+echo "--- ADR-16 falsifier instrument suite (test_pass_support_accuracy.py) ---"
+rc=0; python3 "$DIR/test_pass_support_accuracy.py" || rc=$?
+rc_is $rc 0 "pass-support-accuracy suite passes"
+
+echo
+echo "--- ADR-19 falsifier instrument suite (test_depth_lane_yield.py) ---"
+rc=0; python3 "$DIR/test_depth_lane_yield.py" || rc=$?
+rc_is $rc 0 "depth-lane-yield suite passes"
+
+echo
+echo "--- ADR-20 bounded integration workset suite ---"
+rc=0; python3 "$DIR/test_integration_workset.py" || rc=$?
+rc_is $rc 0 "bounded integration workset suite passes"
+
+echo
+echo "--- ADR-20 deterministic renderer suite ---"
+rc=0; python3 "$DIR/test_render_integration.py" || rc=$?
+rc_is $rc 0 "deterministic renderer suite passes"
+
+echo
+echo "--- ADR-20 subscription reducer boundary suite ---"
+rc=0; python3 "$DIR/test_reducer_sandbox.py" || rc=$?
+rc_is $rc 0 "subscription reducer boundary suite passes"
+
+echo
+echo "--- ADR-20 composed integration pipeline suite ---"
+rc=0; python3 "$DIR/test_integration_pipeline.py" || rc=$?
+rc_is $rc 0 "composed integration pipeline suite passes"
+
+echo
+echo "--- ADR-22 Jev reconciliation shadow suite ---"
+rc=0; python3 "$DIR/test_jev_reconciliation.py" || rc=$?
+rc_is $rc 0 "Jev reconciliation shadow suite passes"
 
 echo
 echo "$PASS passed, $FAIL failed"

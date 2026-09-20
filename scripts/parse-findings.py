@@ -42,7 +42,7 @@ _BULLET = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
 _BOLD_TITLE = re.compile(r"\*\*(.+?)\*\*")
 _NONE = re.compile(r"^\s*(none\.?|no findings\.?)\s*$", re.IGNORECASE)
 # file:line — require a dot-extension so ratios/times/`N:M` don't match. Range tail ok.
-_FILELINE = re.compile(r"([\w./-]+\.[A-Za-z0-9]+):(\d+(?:-\d+)?)")
+_FILELINE = re.compile(r"`?([\w./-]+\.[A-Za-z0-9]+):(\d+(?:[-,]\d+)*)`?")
 # Section headers that are NOT severity sections — skipped, not errored.
 _SKIP_HDR = re.compile(
     r"^\s*#{1,4}\s*(findings|cap overflow|contradictions|reconciler notes|"
@@ -159,6 +159,190 @@ def parse_findings(text):
     else:
         status = "empty"          # genuinely blank
     return {"findings": findings, "status": status}
+
+
+# ======================== REDUCER-ERA LOSSLESS API ========================
+# Additive by ADR-20. Keep parse_findings() above byte-for-byte stable: it is still
+# the legacy capture/provenance API. This walker owns the reducer-era raw ordinal
+# space and records intentional noise-floor differences instead of hiding them.
+
+_ANY_HDR = re.compile(r"^\s*(#{1,6})\s+(.+?)\s*$")
+_EFFORT = re.compile(r"`?\[(trivial|moderate|significant)\]`?", re.IGNORECASE)
+# Reconciler output may qualify support inside the same parentheses, for example
+# ``(2/2 passes — severity contested, see Contradictions)``. Treat that whole
+# span as framing; leaking its tail into the description made degraded reports
+# look structurally corrupt and hid the actual finding prose.
+_SUPPORT = re.compile(
+    r"`?\((\d+)\s*/\s*(\d+)\s+passes?(?:\s+[^)\r\n]*)?\)`?", re.IGNORECASE,
+)
+_CEILING = re.compile(
+    r"\b(?:ceiling|capped?\s+at|may\s+not\s+(?:be\s+)?(?:filed|promoted)\s+above)\b.*?"
+    r"\b(critical|important|minor|noted)\b", re.IGNORECASE,
+)
+_CEILING_WORD = re.compile(r"\b(?:ceiling|capped?\s+at|promoted\s+above)\b", re.IGNORECASE)
+_NON_FINDING_SECTIONS = {
+    "file summaries", "file summary", "per-file summaries", "per-file summary",
+    "verification", "cap overflow", "contradictions", "reconciler notes",
+}
+
+
+def _plain_payload(value):
+    value = re.sub(r"<!--.*?-->", "", value or "")
+    value = value.replace("**", "").replace("__", "").replace("`", "")
+    return value.strip()
+
+
+def _description_from(value):
+    """Remove canonical finding-line framing while preserving the finding prose."""
+    text = (value or "").strip()
+    text = _BOLD_TITLE.sub("", text, count=1)
+    text = _EFFORT.sub("", text, count=1)
+    text = _SUPPORT.sub("", text, count=1)
+    text = _FILELINE.sub("", text, count=1)
+    text = re.sub(r"^(?:\s*[—–:-]\s*)+", "", text).strip()
+    return re.sub(r"\s+", " ", text).strip() or _plain_payload(value)
+
+
+def parse_findings_lossless(text, source_stem="source"):
+    """Reducer-era raw-section parser.
+
+    Returns ``records`` (every structural record with a stable pre-disposition ID),
+    ``findings`` (retained records), ``discards`` (auditable noise-floor records),
+    and the same status vocabulary as parse_findings(). IDs are based on the exact
+    supplied filename stem and never renumber after a discard.
+    """
+    records = []
+    current_severity = None
+    active_nonfinding = None
+    saw_severity = False
+    saw_content = False
+    cur = None
+
+    def finish():
+        nonlocal cur
+        if cur is None:
+            return
+        raw_text = "\n".join(cur["raw_lines"]).strip()
+        payload = " ".join(cur["payload_lines"]).strip()
+        if not payload:
+            cur = None
+            return
+        ordinal = len(records) + 1
+        rid = f"{source_stem}:r{ordinal}"
+        plain = _plain_payload(payload)
+        marker = plain.rstrip(".").lower() in ("none", "no findings")
+        rule = "canonical-empty-marker" if marker else (
+            "non-finding-section" if cur["nonfinding"] else None
+        )
+        file_name, line = _fileline_from(payload)
+        ceiling_match = _CEILING.search(payload)
+        if ceiling_match:
+            ceiling = {"state": "detected", "value": ceiling_match.group(1).lower(),
+                       "policy": "finding-text"}
+        elif _CEILING_WORD.search(payload):
+            ceiling = {"state": "unparsed", "value": None, "policy": "finding-text"}
+        else:
+            ceiling = {"state": "none", "value": None, "policy": None}
+        effort_match = _EFFORT.search(payload)
+        support_match = _SUPPORT.search(payload)
+        rec = {
+            "raw_source_id": rid,
+            "source_stem": source_stem,
+            "ordinal": ordinal,
+            "section": cur["section"],
+            "severity": cur["severity"],
+            "title": _title_from(payload),
+            "file": file_name,
+            "line": line,
+            "effort": effort_match.group(1).lower() if effort_match else None,
+            "description": _description_from(payload),
+            "raw_text": raw_text,
+            "support_tag": ([int(support_match.group(1)), int(support_match.group(2))]
+                            if support_match else None),
+            "severity_ceiling": ceiling,
+            "disposition": "discard" if rule else "retain",
+            "discard_rule": rule,
+        }
+        records.append(rec)
+        cur = None
+
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+
+        mi = _SEV_INLINE.match(line)
+        if mi:
+            finish()
+            current_severity = mi.group(1).lower()
+            active_nonfinding = None
+            saw_severity = True
+            cur = {"severity": current_severity, "section": current_severity.title(),
+                   "nonfinding": False, "raw_lines": [line],
+                   "payload_lines": [mi.group(2).strip()]}
+            continue
+
+        mh = _SEV_HDR.match(line)
+        if mh:
+            finish()
+            current_severity = mh.group(1).lower()
+            active_nonfinding = None
+            saw_severity = True
+            continue
+
+        ah = _ANY_HDR.match(line)
+        if ah:
+            finish()
+            name = re.sub(r"\s+", " ", ah.group(2).strip().rstrip(":")).lower()
+            active_nonfinding = name if name in _NON_FINDING_SECTIONS else None
+            # Any non-severity heading ends the previous severity scope. This is the
+            # intentional reducer-era difference from the legacy parser.
+            current_severity = None
+            saw_content = True
+            continue
+
+        mb = _BULLET.match(line)
+        if mb:
+            finish()
+            if current_severity or active_nonfinding:
+                cur = {"severity": current_severity,
+                       "section": active_nonfinding or current_severity.title(),
+                       "nonfinding": bool(active_nonfinding), "raw_lines": [line],
+                       "payload_lines": [mb.group(1)]}
+            else:
+                saw_content = True
+            continue
+
+        # Bare empty markers are structural records too, even though the legacy API
+        # correctly omits them. They retain a pre-disposition ordinal for audit.
+        if _NONE.match(line) and (current_severity or active_nonfinding):
+            finish()
+            cur = {"severity": current_severity,
+                   "section": active_nonfinding or current_severity.title(),
+                   "nonfinding": bool(active_nonfinding), "raw_lines": [line],
+                   "payload_lines": [line.strip()]}
+            finish()
+            continue
+
+        if cur is not None:
+            cur["raw_lines"].append(line)
+            cur["payload_lines"].append(line.strip())
+        else:
+            saw_content = True
+
+    finish()
+    retained = [r for r in records if r["disposition"] == "retain"]
+    discards = [r for r in records if r["disposition"] == "discard"]
+    if retained:
+        status = "ok"
+    elif saw_severity or records:
+        status = "empty"
+    elif saw_content:
+        status = "no-structure"
+    else:
+        status = "empty"
+    return {"records": records, "findings": retained, "discards": discards,
+            "status": status}
 
 
 # CLI: capture-time validation for record-dispatch.sh --pass. Reads a pass block

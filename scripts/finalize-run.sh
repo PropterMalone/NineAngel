@@ -42,6 +42,19 @@ stage() { # $1=stage name, rest=command
   fi
 }
 
+REDUCER_ERA="$(python3 - "$RUN_DIR" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])/'findings-snapshot.json'
+try: print('yes' if json.loads(p.read_text()).get('version') == 3 else 'no')
+except Exception: print('no')
+PY
+)"
+if [[ "$REDUCER_ERA" == yes ]]; then
+  stage "validate-integration-decisions.py" python3 "$SCRIPT_DIR/validate-integration-decisions.py" \
+    "$RUN_DIR/integration-workset.json" "$RUN_DIR/integration-decisions.json"
+fi
+
 stage "assemble-wpr.py" python3 "$SCRIPT_DIR/assemble-wpr.py" "$RUN_DIR"
 stage "aggregate-usage.py" python3 "$SCRIPT_DIR/aggregate-usage.py" "$RUN_DIR"
 

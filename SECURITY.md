@@ -29,6 +29,7 @@ Out of scope:
 - Do not include it in cloud backups that sync to untrusted storage (iCloud, Google Drive, Dropbox in a shared account).
 - Do not commit it to any git repository, including private ones.
 - The `pii-registry.md` files in per-project memory dirs (`~/.claude/projects/*/memory/pii-registry.md`) are similarly sensitive — field-level maps of where identifiers live in a project.
+- **Policy registries** for domain angels (e.g. `~/.claude/projects/*/memory/caritas-policy/`) are more sensitive still: they name clients, engagements, counterparties, and the specific rules an organization operates under. They live in the gitignored `projects/` tree deliberately — `~/.claude` itself is a git repo with a GitHub remote, so a registry placed anywhere else under `~/.claude` would be committed and published. Never relocate one out of the ignored tree, never quote one into a run report destined for a public mirror, and never include client policy text in a persona file (persona files ship in the public repo; registries never do).
 
 **Retention rule:**
 - **Never delete** dispositioned runs (those with a `dispositions.json`). These are the precision-measurement corpus; deleting them silently corrupts the per-persona value table.

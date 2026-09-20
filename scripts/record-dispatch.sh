@@ -6,7 +6,7 @@
 # under context pressure (ADR-03) — one script call replaces each hand-formatted write.
 #
 # Usage:
-#   record-dispatch.sh [--reader-pack] [--findings] [--pass I] [--failed] [--verdict] \
+#   record-dispatch.sh [--reader-pack] [--findings] [--pass I] [--failed] [--verdict] [--backend NAME] \
 #     <RUN_DIR> <phase> <name> <model> <total_tokens|null> <tool_uses|null> <duration_ms|null> [note]
 #
 #   --reader-pack : sets reader_pack:true on the JSONL line (default false)
@@ -21,6 +21,7 @@
 #                   completeness gate treats as an excused pass. Requires --pass I.
 #   --verdict     : read a JSON verdict from STDIN -> verification/<name>.json (folds the
 #                   §5.7 verifier hand-write into the chokepoint; <name> is the finding id).
+#   --backend NAME: add backend:NAME to the JSONL line (omitted by default for back-compat)
 #   phase         : reader | persona | reconciler | integrator | verifier
 #   name          : [A-Za-z0-9_-]+ (filename component; blocks path traversal; allows the
 #                   mixed-case finding ids used by --verdict, e.g. C1/f2)
@@ -40,6 +41,7 @@ FINDINGS=false
 PASS_I=""
 FAILED=false
 VERDICT=false
+BACKEND=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --reader-pack) READER_PACK=true; shift ;;
@@ -47,12 +49,15 @@ while [[ "${1:-}" == --* ]]; do
     --pass)        PASS_I="${2:-}"; shift 2 ;;
     --failed)      FAILED=true; shift ;;
     --verdict)     VERDICT=true; shift ;;
+    --backend)
+      [[ -n "${2:-}" ]] || { echo "error: --backend requires a name" >&2; exit 1; }
+      BACKEND="$2"; shift 2 ;;
     *) echo "error: unknown flag '$1'" >&2; exit 1 ;;
   esac
 done
 
 if [[ $# -lt 7 || $# -gt 8 ]]; then
-  echo "usage: record-dispatch.sh [--reader-pack] [--findings] [--pass I] [--failed] [--verdict] <RUN_DIR> <phase> <name> <model> <total_tokens|null> <tool_uses|null> <duration_ms|null> [note]" >&2
+  echo "usage: record-dispatch.sh [--reader-pack] [--findings] [--pass I] [--failed] [--verdict] [--backend NAME] <RUN_DIR> <phase> <name> <model> <total_tokens|null> <tool_uses|null> <duration_ms|null> [note]" >&2
   exit 1
 fi
 
@@ -145,13 +150,14 @@ else
 fi
 
 line="$(jq -cn \
-  --arg phase "$PHASE" --arg name "$NAME" --arg model "$MODEL" --arg note "$NOTE" \
+  --arg phase "$PHASE" --arg name "$NAME" --arg model "$MODEL" --arg note "$NOTE" --arg backend "$BACKEND" \
   --arg sa "$STARTED_AT" --arg ea "$ENDED_AT" \
   --argjson tt "$TT" --argjson tu "$TU" --argjson dm "$DM" --argjson rp "$READER_PACK" '
   {phase:$phase, name:$name, model:$model, total_tokens:$tt, tool_uses:$tu,
    duration_ms:$dm, started_at:(if $sa == "" then null else $sa end),
    ended_at:$ea, reader_pack:$rp}
-  + (if $note != "" then {note:$note} else {} end)')"
+  + (if $note != "" then {note:$note} else {} end)
+  + (if $backend != "" then {backend:$backend} else {} end)')"
 
 printf '%s\n' "$line" >> "$RUN_DIR/usage.jsonl"
 
@@ -159,9 +165,15 @@ printf '%s\n' "$line" >> "$RUN_DIR/usage.jsonl"
 if [[ -n "$PASS_I" ]]; then
   mkdir -p "$RUN_DIR/passes"
   PASS_FILE="$RUN_DIR/passes/${NAME}-p${PASS_I}.md"
+  # The marker is the ONLY provenance assemble-wpr.py can see — it reads passes/, not
+  # usage.jsonl. Without backend here, a codex pass is indistinguishable from a Claude
+  # pass except by sniffing the model string, which is why no finding in the corpus
+  # carried codex attribution and both ADR-18's and ADR-19's falsifiers were blocked.
+  BACKEND_ATTR=""
+  [[ -n "$BACKEND" ]] && BACKEND_ATTR=" backend=$BACKEND"
   if $FAILED; then
-    printf '<!-- angel-pass persona=%s pass=%s model=%s failed -->\n(pass failed: %s)\n' \
-      "$NAME" "$PASS_I" "$MODEL" "$NOTE" > "$PASS_FILE"
+    printf '<!-- angel-pass persona=%s pass=%s model=%s%s failed -->\n(pass failed: %s)\n' \
+      "$NAME" "$PASS_I" "$MODEL" "$BACKEND_ATTR" "$NOTE" > "$PASS_FILE"
   else
     status="$(printf '%s' "$BLOCK" | python3 "$SCRIPT_DIR/parse-findings.py" 2>/dev/null || true)"
     if [[ "$status" == "no-structure" ]]; then
@@ -169,7 +181,7 @@ if [[ -n "$PASS_I" ]]; then
       echo "error: pass block for $NAME p$PASS_I has no recognizable finding structure — not written (see ${PASS_FILE}.rejected); re-dispatch" >&2
       exit 2
     fi
-    printf '<!-- angel-pass persona=%s pass=%s model=%s -->\n%s\n' "$NAME" "$PASS_I" "$MODEL" "$BLOCK" > "$PASS_FILE"
+    printf '<!-- angel-pass persona=%s pass=%s model=%s%s -->\n%s\n' "$NAME" "$PASS_I" "$MODEL" "$BACKEND_ATTR" "$BLOCK" > "$PASS_FILE"
   fi
 fi
 
