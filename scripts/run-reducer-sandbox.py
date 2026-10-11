@@ -29,7 +29,7 @@ from pathlib import Path
 from integration_common import atomic_json
 
 
-MODEL = "gpt-5.6-sol"
+MODEL = "gpt-6-sol"
 SUPPORTED_CODEX_VERSIONS = {"codex-cli 0.155.1"}
 CLEANUP_UNPROVABLE_EXIT = 75
 MAX_DECISION_BYTES = 4 * 1024 * 1024

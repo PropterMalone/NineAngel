@@ -45,6 +45,7 @@ Short name mapping:
 | install | Install | `install.md` | Sonnet 5 |
 | blindspot | Blindspot | `blindspot.md` | Opus 5 [1m] |
 | penny | Pennypincher | `pennypincher.md` | Sonnet 5 |
+| attention | Attention | `attention.md` | Sonnet 5 |
 | rtfm | RTFM | `rtfm.md` | Sonnet 5 |
 | editor | Editor | `editor.md` | Sonnet 5 |
 | rigor | Rigor | `rigor.md` | Opus 5 [1m] |
@@ -97,6 +98,8 @@ Model IDs for Agent-tool dispatch: `claude-sonnet-5[1m]`, `claude-opus-5[1m]`, a
 3. Nothing found → **interactive**: ask which artifact to review, or offer to generate one by running the producing command. **Unattended (`claude -p`)**: skip Recipient and record the skip + reason in the report. Do not run the producing command unattended — that is target-repo code execution outside pre-flight (§ trust assumption).
 
 Recipient is `experimental: true` + `default: opt-in` + **`modes: [full]`**, so it is never auto-selected, never auto-attached, and excluded with a one-line note if named on a diff run (a diff never contains the artifact). It runs only when named on a full-project run. Its findings anchor twice (symptom in the artifact → cause in the producing code/prompt); a Recipient finding with no cause half is incomplete, not a code-site failure.
+
+**Attention is experimental and opt-in.** `/angel attention` reviews changed user demands; `/angel attention --full` reviews accumulated project workflows. Read `personas/attention.md` as the shared mandate. It is excluded from auto-battery and `--all`; include it only when explicitly named. Its two tests compare equally good results with less burden and explicit quality/burden tradeoffs, preserving safety and authorization constraints. No live effectiveness has been established.
 
 If the user passes specific names (e.g., `/angel naive adv`), run ONLY those — don't include the rest of the standard battery, and skip the §1.5 detection entirely.
 
@@ -154,14 +157,13 @@ For each persona:
 
 ### Decision
 
-- **0 candidate-drops**: run the full default battery silently.
-- **1–2 candidate-drops**: proceed silently with a one-line note in the report's preamble, e.g., `Skipped perf, test (no hot-path code or test suite detected).`
-- **3+ candidate-drops OR ambiguous signals** (project has both `prompt_files` AND `runtime_code` — meta-tooling repo where multiple persona lanes apply): use the AskUserQuestion tool to confirm before dispatching. Show the recommended battery, list which were dropped, and offer alternatives:
+- **Unambiguous signals, regardless of count**: run the grounded recommended battery silently. Note excluded personas and reasons in the report's preamble, e.g., `Skipped perf, test (no hot-path code or test suite detected).` A numeric drop count alone never requires a selection question.
+- **Actually ambiguous signals** (for example, `prompt_files` AND `runtime_code` where the target's dominant artifact class cannot be resolved): use the AskUserQuestion tool once to confirm before dispatching. Show the recommended battery, list which were dropped, and offer alternatives:
   - **"Recommended"** (the auto-detected battery)
   - **"Run all"** (every `default: yes` regardless of signals — same as `--all`)
   - **"Custom"** (let the user name personas)
 
-**Artifact-class gating (Coach, Editor, Rigor) — and its converse.** These three are gated on the *class* of artifact under review, not on an uncertain code signal: Coach on `prompt_files`, Editor and Rigor on `prose_artifacts`. On a code-dominant change they are cleanly **out-of-class** — exclude them silently and do NOT count them toward the 3+ candidate-drop threshold above (that threshold is for *ambiguous* projects, not for every review that simply isn't prose or prompt-tooling). Conversely, when the change is prose- or prompt-dominant (`prose_artifacts` / `prompt_files` present and code is not the bulk of the diff), the present-code bug-catchers (Adversarial, Test, Data-Integrity, Performance, and similar) are out-of-class — exclude *them* silently and run the artifact-class lane (Editor + Rigor, plus Coach for prompt files) alongside the always-relevant reasoners (Hypercritical, Future-Me, RTFM, Naive). This is the fix for the code-tuned-battery-on-a-prose-doc mismatch: match the battery to the artifact class rather than stacking both.
+**Artifact-class gating (Coach, Editor, Rigor) — and its converse.** These three are gated on the *class* of artifact under review, not on an uncertain code signal: Coach on `prompt_files`, Editor and Rigor on `prose_artifacts`. On a code-dominant change they are cleanly **out-of-class** — exclude them silently; out-of-class exclusions are not selection ambiguity and never require a question by count. Conversely, when the change is prose- or prompt-dominant (`prose_artifacts` / `prompt_files` present and code is not the bulk of the diff), the present-code bug-catchers (Adversarial, Test, Data-Integrity, Performance, and similar) are out-of-class — exclude *them* silently and run the artifact-class lane (Editor + Rigor, plus Coach for prompt files) alongside the always-relevant reasoners (Hypercritical, Future-Me, RTFM, Naive). This is the fix for the code-tuned-battery-on-a-prose-doc mismatch: match the battery to the artifact class rather than stacking both.
 
 ### Explicit override flags
 
@@ -371,14 +373,14 @@ Honest justification (ADR-06): N=2 is chosen on **cost + the marginal-value prio
 
 Each of a persona's N runs gets the same composed prompt and must not see the other runs' findings, just like personas don't see each other's. If `--multiball=N persona_name` is passed, only that persona multiballs; others run once.
 
-**Backend routing — pass 1 Claude, pass 2 Codex (ADR-18, adopted 2026-08-22, time-boxed; revisit ~2026-09-22).** Two Claude passes buy the weakest kind of independence: they resample one model's judgment and share its blind spots exactly. So on interactive runs the passes come from different model families.
+**Backend routing — pass 1 Claude, pass 2 Codex (ADR-18, adopted 2026-08-22, time-boxed; revisit ~2026-09-22).** Two Claude passes buy the weakest kind of independence: they resample one model's judgment and share its blind spots exactly. So on interactive runs the passes come from different model families. This canonical Claude Code workflow now pins GPT-6 Sol for its Codex pass and reducer; ADR-23 separately governs the Polytoken port's ChatGPT/Codex + Z.ai/GLM composition.
 
 - **Pass 1 — Claude**, on the persona's §1 table tier, dispatched with the Agent tool exactly as a single-pass run would be. Its block is the one that goes to `findings/{name}.md`.
 - **Pass 2 — Codex**, through ADR-17's metered leg adapter. Compose the persona prompt ONCE (the shared-prefix template below, persona-by-path), write it to `$RUN_DIR/prompt-{persona}.md`, then:
 
   ```bash
   ~/.claude/skills/angel/scripts/dispatch-leg.sh \
-    --run-dir "$RUN_DIR" --phase persona --name {persona} --model gpt-5.6-sol --pass 2 \
+    --run-dir "$RUN_DIR" --phase persona --name {persona} --model gpt-6-sol --pass 2 \
     < "$RUN_DIR/prompt-{persona}.md"
   ```
 

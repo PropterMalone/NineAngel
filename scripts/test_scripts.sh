@@ -1333,6 +1333,16 @@ rc=0; python3 "$DIR/test_assemble_wpr.py" || rc=$?
 rc_is $rc 0 "assemble-wpr suite passes"
 
 echo
+echo "--- attention persona selection and mandate suite ---"
+rc=0; python3 "$DIR/test_attention.py" || rc=$?
+rc_is $rc 0 "attention selection and mandate suite passes"
+
+echo
+echo "--- grounded battery selection policy suite ---"
+rc=0; python3 "$DIR/test_battery_policy.py" || rc=$?
+rc_is $rc 0 "battery selection follows ambiguity, not drop count"
+
+echo
 echo "--- ADR/SKILL.md consistency gate (test_adr_consistency.py) ---"
 rc=0; python3 "$DIR/test_adr_consistency.py" || rc=$?
 rc_is $rc 0 "adr-consistency suite passes"

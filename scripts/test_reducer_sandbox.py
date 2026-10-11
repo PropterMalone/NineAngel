@@ -108,7 +108,7 @@ class SandboxTests(unittest.TestCase):
         disabled = {command[index + 1] for index, value in enumerate(command[:-1])
                     if value == "--disable"}
         self.assertEqual(disabled, REQUIRED_DISABLED_FEATURES)
-        self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-sol")
+        self.assertEqual(command[command.index("--model") + 1], "gpt-6-sol")
         self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
         self.assertIn("--strict-config", command)
         self.assertIn("--ignore-user-config", command)

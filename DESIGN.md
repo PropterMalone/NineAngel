@@ -72,6 +72,8 @@ Run only when explicitly named.
 
 22. **Caritas** (`caritas`, Sonnet, `requires: [caritas_project]`) — The first **domain angel**: reviews against a specific organization's written policy rather than against craft. Every other persona asks "is this good?"; this one asks "does this comply?" Finds: client-data isolation breaches, client material delivered to unmanaged accounts, cross-client contamination in outbound writing, engagement-posture violations (commitments made before the conditions the rules require), identity hygiene, and **misattribution** — presenting the operator's own principle as firm policy. Its rules come from a layered registry outside the project (`firm` / `user` / `client` layers, composing; `bounty` deferred to v2), never from inference — dispatched without a resolvable `<policy_index>` block it is skipped, not run blind, because a policy reviewer improvising rules carries the authority of a rule that does not exist. Each rule carries a **provenance tier** that is an *attribution right* rather than a confidence score (`stated` may be credited to the firm; `derived` may not, however strongly held) and a `Verified` date past which it is raised as a question rather than asserted. A rule's effective severity ceiling is the **lower** of its layer ceiling and its provenance ceiling — the two come apart on a firm-layer rule whose provenance is `derived`. **Anti-rules are first-class** — several registry entries exist to declare what is *not* a violation, because over-gating is the recorded failure mode on this material. Distinct from Editor (prose craft), Rigor (evidentiary quality of claims), and PII/De-Anon (identifiers in data — Caritas's contamination lane is client identity in outbound *writing*). Ships `default: yes` rather than the usual opt-in entry (ADR-15): both motivating incidents happened while the rule sat readable, so a gate that must be remembered is the gate that already failed; the `caritas_project` signal bounds the blast radius and a demotion falsifier replaces the proving period.
 
+23. **Attention** (`attention`, Sonnet, **experimental**, opt-in, diff/full) — User demands versus delivered result quality. The shared mandate is `personas/attention.md`; selection follows `SKILL.md` and `unattended.md`. Its two tests are equally good results with less burden and worthwhile explicit quality/burden tradeoffs, bounded by safety, privacy, consent, authorization, and accuracy requirements. It may challenge a working feature's demands, unlike User's broken/confusing/silent-flow focus; it is neither a diagnostic ADHD lens nor generic minimalism. Remains excluded from automatic selection and `--all`. No effectiveness or unique-coverage result has been measured; the evidence plan is in `docs/adhd-reviewer-proposal.md`.
+
 ### PII registry — the De-Anon → PII-Sweep learning loop
 
 `pii` and `deanon` share a per-project **PII registry** that turns expensive re-identification discoveries into cheap detection on later runs. It lives at `~/.claude/projects/{encoded-cwd}/memory/pii-registry.md` — outside any git repo, so it is gitignored by construction, per-project, and each user builds their own. It is also sensitive by nature (a map of where the identifiers are), so it must never be committed.
@@ -114,7 +116,7 @@ The adjudication tool is `scripts/mine-runs.py`: a persona earns its slot by **s
 /angel <project-name>          # cd into a named project, then review
 ```
 
-Short names: `naive`, `adv`, `hyper`, `blindspot`, `future`, `rtfm`, `user`, `test`, `data-int`, `perf`, `coach`, `editor`, `rigor` (default-yes); `install`, `thousand`, `fresh`, `heir`, `recip`, `penny`, `pii`, `deanon` (opt-in; experimental: `heir`, `recip`, `penny`, `pii`, `deanon`).
+Short names: `naive`, `adv`, `hyper`, `blindspot`, `future`, `rtfm`, `user`, `test`, `data-int`, `perf`, `coach`, `editor`, `rigor` (default-yes); `install`, `thousand`, `fresh`, `heir`, `recip`, `penny`, `attention`, `pii`, `deanon` (opt-in; experimental: `heir`, `recip`, `penny`, `attention`, `pii`, `deanon`).
 
 ### Battery selection
 
@@ -124,8 +126,8 @@ Short names: `naive`, `adv`, `hyper`, `blindspot`, `future`, `rtfm`, `user`, `te
 2. **Orchestrator detects signals from project tree** at preflight via cheap `find` / `ls` / `grep` scans (<2 seconds total).
 3. **For each persona**: include if `default: yes`, not experimental, mode-matches, AND any required signal is present (or `[any]`).
 4. **Decision**:
-   - 0–2 candidate-drops → run silently with a one-line note.
-   - 3+ candidate-drops or ambiguous signals (project has both `prompt_files` AND `runtime_code`) → ask via `AskUserQuestion` before dispatching.
+   - Unambiguous signals, regardless of drop count → run the grounded recommended battery silently with a one-line exclusion note.
+   - Actual ambiguity about the target's dominant artifact class (for example unresolved `prompt_files` plus `runtime_code`) → ask once via `AskUserQuestion` before dispatching. Count alone is not ambiguity.
 5. **Overrides**: named personas bypass detection; `--all` runs every `default: yes`; `-perf` skips Performance regardless.
 
 Unattended mode (`unattended.md`) applies the same logic but **never asks** — runs the auto-battery and notes drops in the report.

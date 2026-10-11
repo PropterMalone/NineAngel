@@ -15,6 +15,8 @@ Procedure for unattended `claude -p` runs (e.g., the job queue). No user interac
 - `ARTIFACT` (optional): comma-separated path(s) to the **rendered artifact(s)** for the Recipient persona (`recip`) — the output the system emits, not its source. Consulted first when `PERSONAS` includes `recip`; if unset, fall back to committed outputs (`examples/`, `fixtures/`, `samples/`, snapshots, `*.golden`); if none are found, **skip Recipient and record the skip + reason in the report**. Never run it blind, and never run the producing command to generate an artifact (that is target-repo code execution outside pre-flight). A missing `ARTIFACT` is not an error — walk the fallback chain. See SKILL.md §1 "Artifact gate for Recipient."
 - `RUN_TAG` (optional): short string suffix appended to handoff and findings-snapshot filenames (e.g., `baseline`, `reader`). Used when two unattended runs hit the same project dir on the same day (e.g., A/B calibration) — without it, the second run clobbers the first's outputs. Default: no suffix.
 
+**Attention is experimental and opt-in.** Select `PERSONAS: attention` with `MODE: diff` or `MODE: full`; read the shared `personas/attention.md` mandate. It is excluded from auto-detection and `PERSONAS: all`. Unknown quality/burden preferences cause abstention, not an unattended question or an assumed sacrifice.
+
 ### Unsupported in unattended mode
 
 Interactive features are not available via `claude -p`. If a queue prompt requests one of these, fail loudly with an explanatory message rather than silently falling back to single-pass:
@@ -92,7 +94,7 @@ For each persona:
    - Else → drop.
 4. Mode check: if `modes` excludes the run mode, drop.
 
-**Unattended mode never asks.** Run the resulting battery, however many were dropped. Record the dropped personas (with reasons) and pass them to the integrator in Step 4 as `dropped_personas: [{name: reason}, ...]`.
+**Unattended mode never asks.** Like the interactive path for unambiguous signals, run the grounded resulting battery regardless of drop count. Preserve unattended handling of ambiguity and all consent/lockout gates. Record the dropped personas (with reasons) and pass them to the integrator in Step 4 as `dropped_personas: [{name: reason}, ...]`.
 
 ## Step 2.5.5: Run directory + usage meter (unconditional)
 
@@ -165,6 +167,7 @@ Per-persona models (this table is the source of truth alongside SKILL.md §1):
 | install | `install.md` | `claude-sonnet-5[1m]` |
 | blindspot | `blindspot.md` | `claude-opus-5[1m]` |
 | penny | `pennypincher.md` | `claude-sonnet-5[1m]` |
+| attention | `attention.md` | `claude-sonnet-5[1m]` |
 | rtfm | `rtfm.md` | `claude-sonnet-5[1m]` |
 | editor | `editor.md` | `claude-sonnet-5[1m]` |
 | rigor | `rigor.md` | `claude-opus-5[1m]` |

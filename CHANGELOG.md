@@ -4,6 +4,15 @@ All notable changes to NineAngel are documented here. Versioning follows [Semant
 
 ## [Unreleased]
 
+### Added (2026-10-10 — experimental Attention reviewer)
+
+- **Opt-in user-attention mandate** (`attention`) for diff and full-project reviews: equally good results with less burden, or explicit quality/burden tradeoffs tied to stated user purpose. Safety, privacy, consent, necessary authorization, and required accuracy remain constraints. The shared persona is registered on both legacy paths and referenced by the Polytoken adapter; it stays outside default batteries and `--all`. Offline contracts are tested; live usefulness and unique coverage remain unmeasured.
+
+### Changed (2026-09-24 — GPT-6 Sol cutover)
+
+- **All active Codex roles now pin GPT-6 Sol.** The canonical heterogeneous persona leg, the subscription-backed semantic reducer, the Polytoken Angel leaf, and the general Codex/Polytoken defaults moved from GPT-5.6 Sol to `gpt-6-sol`. The model improvement intentionally starts a new calibration era rather than preserving cross-model continuity.
+- **The no-API and qualification boundaries remain unchanged.** Codex runs through ChatGPT subscription authentication with API credentials scrubbed. The semantic reducer still fails closed unless the exact CLI/model/runner identity passes its live non-vacuous admission probe.
+
 ### Fixed (2026-09-20 — reducer boundary self-review)
 - **The subscription reducer now fails closed at the launch boundary.** It accepts only the explicitly supported Codex CLI release from a trusted user/system root, binds qualification to the binary's SHA-256 content digest as well as its path and file identity, launches with a minimal environment allowlist, explicitly disables hosted web search, and refuses hosts that cannot block termination signals across process creation. A termination arriving during `Popen` can no longer strand a reducer outside cleanup.
 - **Instructions and review data are separated by privilege.** The reducer mandate is a Codex developer instruction; the workset is a nonce-delimited, delimiter-escaped user-data message. User/project configuration and rules remain ignored, local model-callable hosts remain disabled before inference, and event inspection remains a secondary detection guard rather than the security boundary.

@@ -58,12 +58,13 @@ NineAngel auto-detects which personas are relevant to your project from signals 
 | `heir`      | Cold-start handoff audit — can a never-met operator + AI agent use/understand/troubleshoot/modify this? (**experimental**) |
 | `recip`     | Recipient — reads the **rendered artifact**, not the source: did the reader get what they came for? (**experimental**; full-mode only; needs `--artifact <path>`) |
 | `penny`     | Cost reviewer — lines, bytes, MB, $, cognitive load, maintenance burden ("rent test"; **experimental**) |
+| `attention` | User attention versus result quality: equally good results with less burden, or explicit quality/burden tradeoffs (**experimental**; diff/full; no live effectiveness established) |
 | `pii`       | Raw-PII detector — personal data in logs, fixtures, dumps, serializers (**experimental**; runs first in the privacy pair) |
 | `deanon`    | Re-identification attacker — quasi-identifiers, reversible pseudonyms, linkage (**experimental**; always runs after `pii`) |
 
 Each persona's frontmatter (`personas/<short>.md`) declares its `default`, `modes`, `experimental` flag, and required signals. The orchestrator reads this at preflight; the frontmatter is the source of truth.
 
-Experimental personas (`penny`, `pii`, `deanon`, `heir`, `recip`) are excluded from auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria.
+Experimental personas (`attention`, `penny`, `pii`, `deanon`, `heir`, `recip`) are excluded from auto-battery until they earn their slot — see `DESIGN.md` for graduation criteria.
 
 `recip` is the one persona that reviews **output** rather than source, so it needs the output handed to it:
 
@@ -86,6 +87,8 @@ Without `--artifact` it looks for committed outputs (`examples/`, `fixtures/`, `
 /angel -perf                  # standard battery minus Performance
 /angel --loop                 # review → fix → re-review (max 3 cycles)
 /angel penny --full           # opt-in persona on the whole project
+/angel attention              # experimental attention review of changed demands
+/angel attention --full       # experimental attention review of accumulated workflows
 /angel --multiball[=N]        # default-ON interactive at N=2 (N=3 on --full/--all); pass =N to override; integrator reconciles
 /angel --balls N              # explicit multiball pass-count override (alias for --multiball=N)
 /angel --no-multiball         # force single-pass (off-switch; alias: --single)
@@ -98,7 +101,7 @@ Without `--artifact` it looks for committed outputs (`examples/`, `fixtures/`, `
 /angel <project-name>         # cd into the named project, then review it
 ```
 
-If detection would drop more than 2 default personas (or if signals are ambiguous), NineAngel asks before dispatching. Otherwise it proceeds silently with a one-line note.
+NineAngel runs the grounded recommended battery silently and notes exclusions, regardless of how many default personas lack signals. It asks before dispatching only when the target's signals leave a real selection ambiguity.
 
 ## Install
 
