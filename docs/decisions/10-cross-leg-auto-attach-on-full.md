@@ -26,7 +26,7 @@ Auto-attaching on `--full`/`--all` puts the leg where its one extra call is most
 **Could-be-wrong-if** (falsifiers, the concrete re-evaluation bar):
 - Over the next ≥5 **paired** runs (`had_angel_report:true`), the cross leg surfaces **zero** findings dispositioned `real`/`accepted` that Angel missed **and** zero correct refutes of Angel → drop the leg. That is the clean negative the 2026-06 trial couldn't produce.
 - Auto-attach makes `--full` runs materially slower/costlier without payoff (cross findings all `noise`/`dup` over ≥5 runs) → revert to opt-in.
-- The codex backend, once exercised on GSD `--full` runs, proves unreliable (timeouts/parse-fail rate > agy) → pin backend or restrict auto-attach to agy.
+- The codex backend, once exercised on restricted-project `--full` runs, proves unreliable (timeouts/parse-fail rate > agy) → pin backend or restrict auto-attach to agy.
 
 **Rejected alternatives.**
 - **Decide keep/drop now on the 5-run corpus.** Rejected: the corpus can't answer the question (see 1–2). Deciding on it would be vibes, not data — the exact thing the task forbade.
