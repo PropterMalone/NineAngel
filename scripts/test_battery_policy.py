@@ -20,7 +20,7 @@ class BatteryPolicy(unittest.TestCase):
         self.assertIn('out-of-class', skill)
         self.assertIn('Named personas', skill)
         self.assertIn('experimental: true', skill)
-        self.assertIn('caritas', skill)
+        self.assertIn('orgpolicy', skill)
         self.assertIn('AskUserQuestion', skill)
         unattended = (ROOT / 'unattended.md').read_text()
         self.assertIn('Unattended mode never asks', unattended)

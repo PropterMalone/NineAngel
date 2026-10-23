@@ -36,7 +36,7 @@ A new persona must:
    - a **demotion falsifier** with a numeric threshold and a named, *computable* instrument replaces the proving period the opt-in entry would have provided;
    - its rules come from a registry it reads at dispatch, not from the prompt, so it is **skipped rather than run blind** when the registry does not resolve.
 
-   The rationale is specific to this class and does not generalize: a domain angel exists because a written rule went unapplied while readable, so a reviewer you have to remember to name is the gate that already failed. Every other persona still enters opt-in. `caritas` is the precedent; ADR-15 queues claim/legal and minor-data on the same terms.
+   The rationale is specific to this class and does not generalize: a domain angel exists because a written rule went unapplied while readable, so a reviewer you have to remember to name is the gate that already failed. Every other persona still enters opt-in. `orgpolicy` is the precedent; future domain angels enter on the same terms.
 
 4. **Add a row** to the SKILL.md (§1) and unattended.md (Step 3) mapping tables — short name, persona file, model assignment.
 

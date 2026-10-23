@@ -56,7 +56,7 @@ SKILL_DIR = Path(__file__).resolve().parent.parent
 DEPTH_ARM = ("thousand", "data-int", "future", "blindspot", "coach",
              "rigor", "deanon", "heir", "recip")
 CONTROL_ARM = ("adv", "hyper", "user", "perf", "install", "penny",
-               "rtfm", "editor", "caritas", "naive", "fresh", "pii")
+               "rtfm", "editor", "orgpolicy", "naive", "fresh", "pii")
 _EXCLUDED = ("test",)             # moves to Sonnet, not Opus — a different bet
 # Derived, so moving a persona into _EXCLUDED actually changes behavior. Before ADR-19's
 # own review this tuple sat in the constants block and nothing read it: `test` was excluded

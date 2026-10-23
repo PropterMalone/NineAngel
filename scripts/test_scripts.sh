@@ -204,27 +204,27 @@ printf 'Compose an <artifact_paths> block for recip before dispatching.\n' >> "$
 rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp5" 2>&1)" || rc=$?
 rc_is $rc 0 "block parity: block on both paths is clean"
 
-# Shared-tag fixture (ADR-16 review, f1). recip and caritas both need
-# <artifact_paths>. unattended.md documents it for recip only, so caritas is
+# Shared-tag fixture (ADR-16 review, f1). recip and orgpolicy both need
+# <artifact_paths>. unattended.md documents it for recip only, so orgpolicy is
 # run-blind there — but the tag is present in the file, which is all the old
 # whole-file substring test asked. This fixture reports clean on the pre-fix
 # validator and must fire now.
 vp7="$TMP/vp7"; rm -rf "$vp7"; mkdir -p "$vp7/personas"
 mk_persona "$vp7/personas/recipient.md"
-mk_persona "$vp7/personas/caritas.md"
+mk_persona "$vp7/personas/organization-policy.md"
 cat > "$vp7/SKILL.md" <<'MD'
 # fixture
 
 | Short | Full | Model |
 |---|---|---|
 | recip | Recipient | Fable 5 |
-| caritas | Caritas | Fable 5 |
+| orgpolicy | Org-Policy | Fable 5 |
 
 When composing the prompt for recip, append an <artifact_paths> block.
 
-When composing the prompt for caritas, append a <policy_index> block.
+When composing the prompt for orgpolicy, append a <policy_index> block.
 
-caritas also receives an <artifact_paths> block when artifacts are supplied.
+orgpolicy also receives an <artifact_paths> block when artifacts are supplied.
 MD
 cat > "$vp7/unattended.md" <<'MD'
 # fixture
@@ -234,17 +234,17 @@ cat > "$vp7/unattended.md" <<'MD'
 | Short | Persona file | Model |
 |-------|-------------|-------|
 | recip | `recipient.md` | `claude-fable-5` |
-| caritas | `caritas.md` | `claude-fable-5` |
+| orgpolicy | `organization-policy.md` | `claude-fable-5` |
 
 When composing the prompt for recip, append an <artifact_paths> block.
 
-When composing the prompt for caritas, append a <policy_index> block.
+When composing the prompt for orgpolicy, append a <policy_index> block.
 MD
 rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp7" 2>&1)" || rc=$?
 rc_is $rc 1 "block parity: shared tag documented for recip only exits nonzero"
-has "'caritas' needs <artifact_paths>" "$vout" "block parity: unscoped-tag drift names caritas, not recip"
-# Documenting it for caritas too on the unattended path clears it.
-printf '\ncaritas also receives an <artifact_paths> block when artifacts are supplied.\n' >> "$vp7/unattended.md"
+has "'orgpolicy' needs <artifact_paths>" "$vout" "block parity: unscoped-tag drift names orgpolicy, not recip"
+# Documenting it for orgpolicy too on the unattended path clears it.
+printf '\norgpolicy also receives an <artifact_paths> block when artifacts are supplied.\n' >> "$vp7/unattended.md"
 rc=0; vout="$("$DIR/validate-personas.py" --skill-dir "$vp7" 2>&1)" || rc=$?
 rc_is $rc 0 "block parity: shared tag documented for both personas is clean"
 

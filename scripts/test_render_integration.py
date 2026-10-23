@@ -78,10 +78,10 @@ class RenderTests(unittest.TestCase):
         union = validator.deterministic_union(bounded_workset, "no-qualified-runner")
         snapshot, _ = renderer.build_artifacts(bounded_workset, union, Path("/tmp"))
         snapshot["personas_dropped"] = [
-            {"perf": "no hot-path code"}, "caritas", {"name": "pii"}, None, ""]
+            {"perf": "no hot-path code"}, "orgpolicy", {"name": "pii"}, None, ""]
         report = renderer.render_report(snapshot)
         self.assertIn("perf (no hot-path code)", report)
-        self.assertIn("caritas (reason not recorded)", report)
+        self.assertIn("orgpolicy (reason not recorded)", report)
         self.assertIn("pii (reason not recorded)", report)
         self.assertIn("unknown entry 4 (reason not recorded)", report)
         self.assertNotIn("None (None)", report)

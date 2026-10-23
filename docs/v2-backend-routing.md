@@ -30,7 +30,7 @@ Personas and pipeline roles stop naming models. They name **capability tiers**, 
 | Tier | What it buys | Current occupants |
 |---|---|---|
 | `depth` | completed causal chains, contract-tracing | thousand, data-int, future, test, coach, blindspot, rigor, deanon, heir, recip |
-| `volume` | high-stability bug-catching | adv, hyper, user, perf, rtfm, editor, install, penny, caritas |
+| `volume` | high-stability bug-catching | adv, hyper, user, perf, rtfm, editor, install, penny, orgpolicy |
 | `breadth` | cheapest coverage | naive, fresh, pii |
 | `synthesis-1m` | large-window load-bearing synthesis | integrator |
 | `mechanical` | within-lane comparison, no discovery | reconcilers |
@@ -176,7 +176,7 @@ The orchestrator stays a Claude Code skill for now — the driver is the point o
 
 ### 2.8 What does NOT change
 
-Persona specs and frontmatter; findings contracts and `parse-findings.py`; Stage-1 reconciler → integrator → verifier pipeline structure; run-dir schema (extended, never reshaped); profiles and the milestones-not-per-diff frequency doctrine; multiball N semantics (pending §2.6 evaluation); pii→deanon sequencing; caritas gating (ADR-15) and recip's artifact gate (SKILL.md §1, "Artifact gate for Recipient"); the reader retirement; every untrusted-content guard. (`validate-personas.py` DOES change — in P1's scope, §2.1.) The v2 surface is dispatch, routing, metering, and the two named tools.
+Persona specs and frontmatter; findings contracts and `parse-findings.py`; Stage-1 reconciler → integrator → verifier pipeline structure; run-dir schema (extended, never reshaped); profiles and the milestones-not-per-diff frequency doctrine; multiball N semantics (pending §2.6 evaluation); pii→deanon sequencing; orgpolicy gating (ADR-15) and recip's artifact gate (SKILL.md §1, "Artifact gate for Recipient"); the reader retirement; every untrusted-content guard. (`validate-personas.py` DOES change — in P1's scope, §2.1.) The v2 surface is dispatch, routing, metering, and the two named tools.
 
 ## 3. Migration plan — each phase independently shippable, each with a runnable falsifier
 

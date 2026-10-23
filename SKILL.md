@@ -23,7 +23,7 @@ Arguments from the user invocation (after `/angel`):
 - `--no-verify` → skip the adversarial verification stage (§5.7). Default: verification ON whenever the integrator's `verify_queue` is non-empty (ADR-08).
 - `--micro` → the minimal-core profile for routine mid-development checks (ADR-09): battery = **adv + hyper**, plus **data-int** when its `requires.any_of` signals fire — nothing else; §1.5 detection is bypassed. N=2 as always. **Inline integration is this profile's default** (§5 — a ≤4-persona output set doesn't need a 1M-window integrator dispatch), and the §5.7 verification stage still applies. ~0.4–0.6M tokens vs 1.0–1.6M for a standard run — the only sub-1M review option (measured 2026-07-08: /code-review at any effort ≈ 4M all-bucket, an equivalent, not a lighter tier).
 - `--model-override <tier>` → force all personas to `sonnet` | `opus` | `fable` for this run (overrides the per-persona defaults below; `haiku` is no longer a legal value — ADR-21). **This also forces multiball back to homogeneous Claude** (ADR-18): the flag's whole vocabulary is Claude tiers, and *all personas* means every pass, so pass 2 runs on Claude at `<tier>` instead of routing to the codex backend. That is the deliberate escape hatch when codex is unavailable or a same-model comparison is the point — and because such a run produces no cross-model corroboration, the orchestrator MUST record `multiball: homogeneous (--model-override <tier>)` in the report's Integration Notes so an ADR-18 trial-month run that had no Codex pass is legible as such instead of being counted as one. `fable` remains a legal value here — Fable is retired as a *default* (ADR-19), not made unreachable, so a deliberate same-model comparison can still ask for it. The integrator's model is selected per §5 (`claude-opus-5[1m]`, else inline) and is NOT affected by `--model-override`.
-- `--artifact <path>` → supply the **rendered artifact** for the Recipient persona (see the artifact-gate note in §1): the thing the system emits when it runs, not its source. Repeatable for a sample set. **Recipient and Caritas** read it; every other persona ignores it. The two are gated differently: `recip` without an artifact is skipped, `caritas` without one reviews the repo as normal — outbound drafts sharpen it, their absence does not blind it.
+- `--artifact <path>` → supply the **rendered artifact** for the Recipient persona (see the artifact-gate note in §1): the thing the system emits when it runs, not its source. Repeatable for a sample set. **Recipient and Org-Policy** read it; every other persona ignores it. The two are gated differently: `recip` without an artifact is skipped, `orgpolicy` without one reviews the repo as normal — outbound drafts sharpen it, their absence does not blind it.
 - `--reader` → enable the bundle reader (Step 0, see §3.5) — produces per-persona context packs. Default: OFF, permanently per `docs/decisions/01-reader-default-off.md` (13-project calibration showed +17.4% tokens / +49% wall with no quality upside). Revisit only after a slicer re-implementation.
 - `--fix-last` → skip review entirely. Read the last run's fix batch from the per-project memory dir and dispatch to `/code` to execute. See step 10.
 - A project name (e.g., `MyProject`) → review that project (cd into it first)
@@ -53,7 +53,7 @@ Short name mapping:
 | deanon | De-Anon | `deanon.md` | Opus 5 [1m] |
 | heir | Heir | `heir.md` | Opus 5 [1m] |
 | recip | Recipient | `recipient.md` | Opus 5 [1m] |
-| caritas | Caritas | `caritas.md` | Sonnet 5 |
+| orgpolicy | Org-Policy | `organization-policy.md` | Sonnet 5 |
 
 Integrator → selected per §5 ladder (`claude-opus-5[1m]` → inline; ADR-04's rule, re-pointed by ADR-19) — not a table row, not affected by `--model-override`.
 
@@ -139,7 +139,7 @@ At preflight, decide which signals apply to the project tree. Each signal is a *
 | `install_docs_changed` | (diff mode only) The diff touches install/setup documentation or its environment. Hints: `README*`, `Dockerfile`, `INSTALL.md`, install-section headers, `.env.example`, etc. |
 | `hot_path_indicators` | The project has code paths likely on a request/job/processing hot path. Hints: `server/`, `worker/`, `processor/`, `pipeline/`, queue consumers, request handlers, etc. |
 | `prose_artifacts` | The change (diff mode) or project (full mode) is **predominantly prose** — documentation, decision records, READMEs, design docs, drafted messages — rather than code. Diff mode: the diff is mostly `.md` / `docs/` / ADR-or-decision dirs / `takes/` / drafts with little or no code change (a code diff that merely touches a README does NOT count — code must not dominate). Full mode: the repo is primarily a docs/prose tree. |
-| `caritas_project` | The project is Caritas (an example client) client work, not personal work. Hints: the project path is under `~/Projects/client-work/`, a git remote in the `example-client-org` org, a CLAUDE.md naming Caritas / an example client / a client contact, or `@caritas.ventures` identity config. Judge by ownership of the work, not by subject matter — a personal project that merely mentions a client does not qualify. |
+| `organization_policy_project` | The project is governed client work, not personal work. Hints: the project path is under `~/Projects/client-work/`, a git remote in an organization-owned namespace, project instructions naming an organization or client contact, or managed-account identity config. Judge by ownership of the work, not by subject matter — a personal project that merely mentions a client does not qualify. |
 
 ### Persona selection
 
@@ -167,7 +167,7 @@ For each persona:
 
 ### Explicit override flags
 
-- `--all` bypasses §1.5 entirely: run every `default: yes` persona (still excluding `experimental: true`). The user has decided detection is wrong. **One carve-out: `caritas` still requires its `caritas_project` signal** (§4 → "Policy registry context"). Deciding detection is wrong for craft lanes is a judgment about coverage; firing an organization's policy reviewer over an unrelated project is a judgment about *whose rules govern the work*, which `--all` was never meant to make.
+- `--all` bypasses §1.5 entirely: run every `default: yes` persona (still excluding `experimental: true`). The user has decided detection is wrong. **One carve-out: `orgpolicy` still requires its `organization_policy_project` signal** (§4 → "Policy registry context"). Deciding detection is wrong for craft lanes is a judgment about coverage; firing an organization's policy reviewer over an unrelated project is a judgment about *whose rules govern the work*, which `--all` was never meant to make.
 - `-perf` skips Performance specifically, regardless of detection.
 - Named personas (e.g., `/angel coach blindspot`) bypass §1.5 entirely.
 
@@ -466,7 +466,7 @@ The rendered artifact(s) you are reviewing, one absolute path per line. Read the
 
 Paths MUST be absolute — a subagent's cwd is not the project root, and `--artifact` accepts relative paths that only resolve in the invoker's shell. Resolve them in the orchestrator before composing. Dispatching `recip` without this block is the run-blind case the §1 gate forbids: if the gate's resolution produced no paths, skip the persona and record the reason instead of dispatching it empty.
 
-**`caritas` also receives an `<artifact_paths>` block when artifacts are supplied** — its highest-yield surface is the outbound draft, and like `recip` it cannot see invocation flags. Use a different lead line, because the artifact is *additional* input for caritas rather than its whole input, and the wording above would mis-instruct it:
+**`orgpolicy` also receives an `<artifact_paths>` block when artifacts are supplied** — its highest-yield surface is the outbound draft, and like `recip` it cannot see invocation flags. Use a different lead line because the artifact is additional input rather than its whole input:
 
 ```
 <artifact_paths>
@@ -475,15 +475,15 @@ Rendered artifact(s) in scope for this review, one absolute path per line. Read 
 </artifact_paths>
 ```
 
-The gate differs too: **no artifacts → `recip` is skipped, `caritas` is dispatched normally** and reviews the repo. Never skip caritas for want of an artifact; its own gate is `caritas_project` plus a resolvable registry.
+The gate differs too: **no artifacts → `recip` is skipped, `orgpolicy` is dispatched normally** and reviews the repo. Never skip orgpolicy for want of an artifact; its own gate is `organization_policy_project` plus a resolvable registry.
 
-### Policy registry context (caritas)
+### Policy registry context (orgpolicy)
 
-Caritas reviews against an organization's written policy (ADR-15, domain angels), and that policy lives outside the project — so the rules have to reach the leaf. When composing the prompt for `caritas`, **append a `<policy_index>` block after the `## Your Persona` tail** (after it, so the shared-prefix rule below is preserved — same sanctioned deviation shape as `<artifact_paths>`):
+Org-Policy reviews against an organization's written policy, which lives outside the project (ADR-15). When composing the prompt for `orgpolicy`, append a `<policy_index>` block after the `## Your Persona` tail:
 
 ```
 <policy_index>
-The Caritas policy registry. Read the index FIRST, then read every module listed as active below — these paths ARE your rule set. Do not reconstruct policy from memory, from <project_context>, or from inference; a rule you did not read here does not exist for this review.
+The organization-policy registry. Read the index FIRST, then every active module below. These paths ARE your rule set. Do not reconstruct policy from memory, project context, or inference.
 index: {REGISTRY_ROOT}/index.md
 active: {REGISTRY_ROOT}/modules/firm.md
 active: {REGISTRY_ROOT}/modules/user.md
@@ -491,21 +491,15 @@ active: {REGISTRY_ROOT}/modules/clients/{detected-client}.md
 </policy_index>
 ```
 
-**Substitute real absolute paths before dispatching — the placeholders above are documentation, not literals.** `{REGISTRY_ROOT}` is the org's registry directory under `~/.claude/projects/{encoded-org-cwd}/memory/caritas-policy/`; resolve `~` yourself, because a subagent's cwd is not the project root and `~` may not expand in the leaf's reading context. `{detected-client}` is a filename you resolve by listing `{REGISTRY_ROOT}/modules/clients/` and matching against what you actually detected in scope — **emit an `active:` line for a client module only when that client is detected, and emit none when no client is detected.** Copying the client line verbatim from this example is the failure mode it is written to prevent: it would dispatch one client's rules on every review, which the layering exists to avoid.
+Resolve `{REGISTRY_ROOT}` deterministically from the reviewed project's private memory directory: read `<project-memory>/organization-policy-registry.path`, which must contain exactly one absolute path and no other nonblank lines. Reject relative paths, unresolved paths, symlinks escaping the declared root, or a missing pointer; never search neighboring registries or infer an organization from prose. Emit a client-module line only when that client is detected and the module exists beneath that root; copying the placeholder line verbatim would apply one client's rules to every review.
 
-The example is deliberately placeholder-shaped. Real client names must not appear in this file — `SKILL.md` ships to the public mirror and the registry never does (SECURITY.md), so a literal client path here discloses a client relationship in committed documentation.
+Identifying organization or customer names must not appear in this public file. Paths carry contents by reference, not by value, keeping the restricted rule set outside the prompt prefix and repository.
 
-Paths carry **contents by reference, not by value** — the leaf reads the modules itself, the same way it reads its own persona file (§ dispatch-by-path below). That keeps a growing rule set out of the uncached per-persona region of the prompt.
+Always include the `firm` and `user` modules. Include a client appendix only when detectable in scope by project path, recipient domain, or named entities in the artifact.
 
-The registry is **org-scoped, not run-scoped**: one fixed absolute path regardless of the run's cwd. `$HANDOFF_DIR` is keyed to encoded cwd (`init-run.sh`), so using it would give two sub-projects of one engagement two divergent copies of the same firm's policy. It sits under `~/.claude/projects/…/memory/` for the same reason `pii-registry.md` does: `~/.claude` is a git repo with a GitHub remote and its `.gitignore` excludes `projects/`, so the gitignored memory tree is the one place client policy cannot be committed and pushed.
+**`orgpolicy` requires `organization_policy_project` even under `--all`.** Re-evaluate the signal before dispatch and skip with a recorded reason when absent. Registry resolution is a separate guard and cannot establish that the organization's rules govern the current project.
 
-Always include the `firm` and `user` modules. Include a `client` appendix only when that client is detectable in scope — by project path, by recipient domain, or by named entities in the artifact under review. Listing every appendix on every run defeats the point of the layering and dilutes the reviewer's attention.
-
-**`caritas` requires the `caritas_project` signal even under `--all`.** This is a deliberate exception to §1.5's override semantics: `--all` bypasses signal gating for every other persona, but not for this one. Re-evaluate `caritas_project` before composing its dispatch, and skip the persona with a recorded reason when the signal is absent. Rationale: caritas asserts *an organization's policy* over the work under review, so firing it on an unrelated project produces findings carrying firm authority over work the firm has nothing to do with — the same "authority of a rule that does not exist" harm the persona exists to prevent, inverted into a real rule wrongly applied.
-
-**This gate is the one that bounds the blast radius; registry resolution is not.** The registry path is org-scoped and fixed (above), so it resolves on *every* project — a resolvability check therefore cannot distinguish a Caritas project from any other and must never be relied on for that. It remains as an independent second guard against a different failure: a genuinely-Caritas run whose registry is missing or moved.
-
-**Never dispatch `caritas` without this block.** If the registry does not resolve, **skip the persona and record the reason** rather than dispatching it to improvise rules. Same run-blind prohibition as the `recip` artifact gate.
+**Never dispatch `orgpolicy` without the `<policy_index>` block.** If the registry does not resolve, skip and record the reason rather than allowing the persona to improvise rules.
 
 For EACH persona, compose a prompt. The prompt template depends on whether `--reader` is on:
 
@@ -570,7 +564,7 @@ Structure your response EXACTLY like this:
 
 (or "None." if nothing to note. Max 3 items in this tier.)
 
-**One sanctioned exception to the cap.** `caritas` items titled `registry candidate:` or `rule question:` do not count against the 3. Noted is that persona's only channel for growing and correcting its rule registry, so a capped channel silently discards the accretion path — a single stale-rule question can fill the slots on a routine run. Ordinary Noted observations still cap at 3 and come first; the exempt entries follow them.
+**One sanctioned exception to the cap.** `orgpolicy` items titled `registry candidate:` or `rule question:` do not count against the 3. Noted is that persona's registry-correction channel. Ordinary Noted observations still cap at 3 and come first; exempt entries follow them.
 
 Effort tags (required for Critical/Important/Minor, not for Noted):
 - `[trivial]` — one-line fix, under 5 minutes (rename, add a null check, fix a typo)
@@ -648,7 +642,7 @@ Structure your response EXACTLY like this:
 
 (or "None." if nothing to note. Max 3 items in this tier.)
 
-**One sanctioned exception to the cap.** `caritas` items titled `registry candidate:` or `rule question:` do not count against the 3. Noted is that persona's only channel for growing and correcting its rule registry, so a capped channel silently discards the accretion path — a single stale-rule question can fill the slots on a routine run. Ordinary Noted observations still cap at 3 and come first; the exempt entries follow them.
+**One sanctioned exception to the cap.** `orgpolicy` items titled `registry candidate:` or `rule question:` do not count against the 3. Noted is that persona's registry-correction channel. Ordinary Noted observations still cap at 3 and come first; exempt entries follow them.
 
 Effort tags (required for Critical/Important/Minor, not for Noted):
 - `[trivial]` — one-line fix, under 5 minutes (rename, add a null check, fix a typo)

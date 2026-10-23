@@ -44,9 +44,9 @@ NineAngel auto-detects which personas are relevant to your project from signals 
 | `coach`    | prompt files (personas, skills)       | Reviews agent prompts — alignment + execution                                   |
 | `editor`   | prose artifacts                       | Prose quality — clarity, structure, tone, wasted words in docs/READMEs/ADRs    |
 | `rigor`    | prose artifacts                       | Analytical rigour — unsupported claims, vague hedges, missing falsifiers        |
-| `caritas`  | Caritas client work (`caritas_project`) | Domain angel — reviews against an **organization's written policy**, not craft: data isolation, delivery channel, engagement posture, attribution |
+| `orgpolicy` | Governed client work (`organization_policy_project`) | Domain angel — reviews against an **organization's written policy**, not craft: data isolation, delivery channel, engagement posture, attribution |
 
-`caritas` is the one default-yes persona whose signal is **not** bypassed by `--all` / `PERSONAS: all`, and the only one that is skipped rather than dispatched when its input — a policy registry outside the project — does not resolve. A policy reviewer improvising rules carries the authority of a rule that does not exist, so running it blind is worse than not running it. See ADR-15.
+`orgpolicy` is the one default-yes persona whose signal is **not** bypassed by `--all` / `PERSONAS: all`, and the only one skipped rather than dispatched when its policy registry does not resolve. Running a policy reviewer without its written rules is worse than skipping it. See ADR-15.
 
 **Opt-in** (named explicitly):
 

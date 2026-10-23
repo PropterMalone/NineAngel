@@ -45,7 +45,7 @@ DISPATCH_BLOCKS = {
     "pii": ["<pii_registry>"],
     "deanon": ["<pii_registry>", "<pii_findings>"],
     "recip": ["<artifact_paths>"],
-    "caritas": ["<policy_index>", "<artifact_paths>"],
+    "orgpolicy": ["<policy_index>", "<artifact_paths>"],
 }
 
 # Personas whose short name appears inside another persona's name/prose as a bare
@@ -79,8 +79,8 @@ def block_documented(text, persona, block):
 
     Persona-scoped on purpose. The original check was a whole-file substring test,
     which passed vacuously the moment two personas shared a tag: `recip`'s
-    <artifact_paths> prose satisfied the check for `caritas` on a path that never
-    mentioned caritas, so the guard reported clean on the exact drift it was built
+    <artifact_paths> prose satisfied the check for `orgpolicy` on a path that never
+    mentioned orgpolicy, so the guard reported clean on the exact drift it was built
     to catch (ADR-16 review, f1 — reproduced by execution three times). A paragraph
     is the unit because every one of these instructions is written as one:
     "When composing the prompt for `X`, append a <block> block ...".
